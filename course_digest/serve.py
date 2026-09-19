@@ -270,7 +270,8 @@ class Handler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
         if ctype.startswith("text/") or ctype in ("application/json", "image/svg+xml"):
             ctype += "; charset=utf-8"
-        self._send(200, target.read_bytes(), ctype)
+        # no-cache：改完前端刷新就能拿到新的，不用清浏览器缓存
+        self._send(200, target.read_bytes(), ctype, {"Cache-Control": "no-cache"})
 
 
 # ----------------------------------------------------------------------

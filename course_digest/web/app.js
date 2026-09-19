@@ -17,6 +17,9 @@ import * as pdfjsLib from './vendor/pdfjs/pdf.min.mjs';
 const PRELOAD_PAGES = 2;
 /* 渲染比例上限，防止超宽屏上 canvas 过大 */
 const MAX_SCALE = 2;
+/* 网络请求超时：没这个，碰到死连接会永远停在「加载中…」 */
+const FETCH_TIMEOUT_MS = 5000;
+const PDF_TIMEOUT_MS = 15000;
 
 const VENDOR = './vendor/pdfjs/';
 
@@ -43,20 +46,45 @@ function docIdFromUrl(params) {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+/* 带超时的 fetch：超时 / 失败都抛人话错误。
+ * 没有超时的话，服务被停过、连接半死时 fetch 会永远 pending，
+ * 页面就卡在「加载中…」——不报错也不重试。 */
+async function fetchJson(url) {
+  let res;
+  try {
+    res = await fetch(url, {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    });
+  } catch (err) {
+    if (err && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      throw new Error(`请求超时（${FETCH_TIMEOUT_MS / 1000} 秒）：${url}`);
+    }
+    throw new Error(`请求失败：${url}（${err && err.message}）`);
+  }
+  if (!res.ok) throw new Error(`${url} 返回 ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+/* 给任意 promise 加超时（PDF.js 的加载不走 fetch JSON 那条路） */
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label}超时（${ms / 1000} 秒）`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function fetchDocData() {
   const params = new URLSearchParams(location.search);
 
   if (params.has('mock')) {
-    const res = await fetch('./fixture/mock.json', { cache: 'no-store' });
-    if (!res.ok) throw new Error(`mock 数据读取失败：${res.status} ${res.statusText}`);
-    return res.json();
+    return fetchJson('./fixture/mock.json');
   }
 
   const id = docIdFromUrl(params);
   if (!id) throw new Error('缺少 docId：请用 ?doc=<docId> 或 /doc/<docId> 访问');
-  const res = await fetch(`/api/doc/${encodeURIComponent(id)}`);
-  if (!res.ok) throw new Error(`/api/doc/${id} 返回 ${res.status} ${res.statusText}`);
-  return res.json();
+  return fetchJson(`/api/doc/${encodeURIComponent(id)}`);
 }
 
 /* ------------------------------------------------------------------ *
@@ -251,10 +279,14 @@ function renderMarkdown() {
 
 const workerUrl = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
 
-function setStatus(msg) {
+let statusRetry = null;
+
+function setStatus(msg, retry = null) {
   const el = $('#pdf-status');
   el.textContent = msg || '';
   el.hidden = !msg;
+  statusRetry = retry;
+  el.classList.toggle('retryable', Boolean(retry));
 }
 
 async function measurePages() {
@@ -299,13 +331,17 @@ async function loadPdf(url) {
   setStatus('加载 PDF…');
   pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
-  state.pdf = await pdfjsLib.getDocument({
-    url,
-    cMapUrl: `${VENDOR}cmaps/`,
-    cMapPacked: true,
-    standardFontDataUrl: `${VENDOR}standard_fonts/`,
-    wasmUrl: `${VENDOR}wasm/`,
-  }).promise;
+  state.pdf = await withTimeout(
+    pdfjsLib.getDocument({
+      url,
+      cMapUrl: `${VENDOR}cmaps/`,
+      cMapPacked: true,
+      standardFontDataUrl: `${VENDOR}standard_fonts/`,
+      wasmUrl: `${VENDOR}wasm/`,
+    }).promise,
+    PDF_TIMEOUT_MS,
+    'PDF 加载',
+  );
 
   state.sizes = await measurePages();
   setStatus('');
@@ -511,7 +547,14 @@ async function switchVersion(version, opts = {}) {
   updateVersionButtons();
 
   const url = version === 'full' ? data.pdf_full : data.pdf_simplified;
-  await loadPdf(url);
+  try {
+    await loadPdf(url);
+  } catch (err) {
+    console.error('PDF 加载失败', err);
+    // 只把错误放到 PDF 那一栏，右侧已渲染的总结保留（不白屏）
+    setStatus(`PDF 加载失败：${err.message}（点这里重试）`, () => switchVersion(version, opts));
+    return;
+  }
   layoutPages();
   observePages();
 
@@ -564,6 +607,9 @@ function downloadMd() {
 function wireInteractions() {
   $('#md').addEventListener('click', onMdClick);
   $('#btn-download').addEventListener('click', downloadMd);
+  $('#pdf-status').addEventListener('click', () => {
+    if (statusRetry) statusRetry();
+  });
   document.querySelectorAll('#version-switch button').forEach((b) => {
     b.addEventListener('click', () => switchVersion(b.dataset.version));
   });
@@ -589,6 +635,14 @@ function showError(err) {
   p.style.color = '#c00';
   p.textContent = `加载失败：${err.message}`;
   article.appendChild(p);
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = '重试';
+  btn.style.marginTop = '12px';
+  btn.addEventListener('click', () => location.reload());
+  article.appendChild(btn);
+
   setStatus('加载失败');
   $('#doc-title').textContent = 'course-digest';
 }

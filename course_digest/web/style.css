@@ -221,6 +221,11 @@ button:active { background: #e6e6e9; }
 /* 锚点指向已删页、连回退都失败时（理论分支）只高亮不滚动 */
 .skipped-banner.no-target { border-left-color: #b8b8bd; color: #6e6e73; background: #f7f7fa; }
 
+#pdf-status.retryable {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
 @media print {
   #topbar, #pdf-pane { display: none; }
   #layout { display: block; height: auto; }
