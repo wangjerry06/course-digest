@@ -14,6 +14,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from course_digest import compress  # noqa: E402
+from course_digest import extract  # noqa: E402
 from course_digest import paths, simplify  # noqa: E402
 from course_digest import publish  # noqa: E402
 from course_digest.import_pdf import slugify  # noqa: E402
@@ -498,6 +499,21 @@ def main():
     )
     _long = publish.title_from_extract({"pages": [{"text": "A" * 90 + "\n" + "B" * 90}]})
     check("title: 截断到 80 字符", _long is not None and len(_long) <= 80)
+
+    # --- M6：text 渲染（只输出保留页 + 页码标记）---
+    r_text = compress.build_extract(Path("dummy.pdf"), ["A" * 60 + "\nB", "A" * 60 + "\nB\nC", "独立页"], 0.85)
+    rendered = extract.render_text(r_text)
+    check("text: 被合并的页不出现在正文里", "===== P1 =====" not in rendered)
+    check("text: 保留页有标记且内容在", "===== P2 =====" in rendered and "C" in rendered)
+    check("text: 独立页也在", "===== P3 =====" in rendered)
+    check("text: 标记行数 == 保留页数", rendered.count("===== P") == r_text["stats"]["kept_pages"])
+    only_two = extract.render_text(r_text, [2])
+    check("--pages 过滤生效", "===== P2 =====" in only_two and "===== P3 =====" not in only_two)
+    check(
+        "--pages 越界报错",
+        raises(ValueError, extract._parse_pages, "999", 39),
+    )
+    check("--pages 解析区间", extract._parse_pages("1-3,5", 39) == [1, 2, 3, 5])
 
     print("ALL PASS")
 

@@ -50,6 +50,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_simplify.set_defaults(func=simplify.run)
 
+    p_text = sub.add_parser(
+        "text", help="打印压缩后正文（只含保留页，带页码标记）—— agent 写总结读这个"
+    )
+    p_text.add_argument("doc_id", help="import 产出的 docId")
+    p_text.add_argument(
+        "--pages",
+        metavar="SPEC",
+        help='只输出这些页，如 "1-5,9"（默认全部保留页）',
+    )
+    p_text.set_defaults(func=extract.run_text)
+
     p_publish = sub.add_parser(
         "publish", help="校验锚点 → simplify → 落盘 summary/meta → 起服务并打开页面"
     )

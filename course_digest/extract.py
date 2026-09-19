@@ -60,6 +60,93 @@ def _warn_guard_splits(split_pages: list[int]) -> None:
     )
 
 
+def render_text(result: dict, pages: list[int] | None = None) -> str:
+    """把 extract.json 的**压缩后正文**渲染成带页码标记的纯文本。
+
+    只输出保留页（`is_progressive_dup == False`）—— 这就是该喂给 agent 的那份：
+    渐进重复页已被合并掉，不用 agent 自己判断。pages 给定时只输出其中的页。
+    """
+    blocks: list[str] = []
+    for page in result.get("pages", []):
+        number = page.get("page")
+        if page.get("is_progressive_dup"):
+            continue
+        if pages is not None and number not in pages:
+            continue
+        blocks.append(f"===== P{number} =====")
+        blocks.append((page.get("text") or "").rstrip())
+        blocks.append("")
+    return "\n".join(blocks).rstrip() + "\n"
+
+
+def _parse_pages(spec: str, total: int) -> list[int]:
+    """解析 --pages 规格："1-5,9" → 升序去重的页号列表；越界/非法抛 ValueError。"""
+    pages: set[int] = set()
+    for raw in spec.split(","):
+        token = raw.strip()
+        if not token:
+            continue
+        lo_s, sep, hi_s = token.partition("-")
+        try:
+            lo, hi = (int(lo_s), int(hi_s)) if sep else (int(token), int(token))
+        except ValueError:
+            raise ValueError(f"invalid page spec {token!r} in --pages (want '3' or '9-11')")
+        if lo > hi:
+            raise ValueError(f"invalid range {token!r} in --pages (from > to)")
+        if lo < 1 or hi > total:
+            raise ValueError(f"page spec {token!r} out of range: valid pages are 1-{total}")
+        pages.update(range(lo, hi + 1))
+    return sorted(pages)
+
+
+def run_text(args) -> int:
+    """text：打印压缩后正文（只含保留页）。stdout 纯正文，统计走 stderr。"""
+    try:
+        doc_dir = paths.doc_dir(args.doc_id)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    extract_path = doc_dir / "extract.json"
+    if not doc_dir.is_dir():
+        print(f"error: doc not found: {args.doc_id}", file=sys.stderr)
+        return 1
+    if not extract_path.is_file():
+        print(
+            f"error: extract.json not found for doc '{args.doc_id}'; run extract first",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        result = json.loads(extract_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"error: cannot read {extract_path}: {exc}", file=sys.stderr)
+        return 1
+
+    pages = None
+    if args.pages:
+        try:
+            pages = _parse_pages(args.pages, len(result["pages"]))
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    print(render_text(result, pages), end="")
+
+    stats = result["stats"]
+    dropped = [p["page"] for p in result["pages"] if p.get("is_progressive_dup")]
+    print(
+        f"保留 {stats['kept_pages']}/{stats['total_pages']} 页；"
+        f"压缩后正文 {stats['chars_after']} 字符（归一化计数；原始 {stats['chars_before']}）",
+        file=sys.stderr,
+    )
+    if dropped:
+        print(f"被合并（未输出）的页：{dropped}", file=sys.stderr)
+    if pages is not None:
+        print(f"--pages 只输出你指定的页：{pages}", file=sys.stderr)
+    return 0
+
+
 def _print_summary(result: dict) -> None:
     stats = result["stats"]
     print(
