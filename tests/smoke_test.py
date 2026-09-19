@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from course_digest import compress  # noqa: E402
 from course_digest import paths, simplify  # noqa: E402
+from course_digest import publish  # noqa: E402
 from course_digest.import_pdf import slugify  # noqa: E402
 from pypdf import PdfReader, PdfWriter  # noqa: E402
 
@@ -476,6 +477,27 @@ def main():
             )
         finally:
             paths.DOCS_DIR = saved
+
+    # --- P5：meta.title 取首个非空页的前两行（2026-09-19 老大拍板）---
+    check(
+        "title: 取前两行、用 — 连接",
+        publish.title_from_extract({"pages": [{"text": "第一行\n第二行\n第三行"}]})
+        == "第一行 — 第二行",
+    )
+    check(
+        "title: 跳过空行；单行不加分隔符",
+        publish.title_from_extract({"pages": [{"text": "\n\n只有一行\n"}]}) == "只有一行",
+    )
+    check(
+        "title: 跳过空文本页",
+        publish.title_from_extract({"pages": [{"text": "  "}, {"text": "封面"}]}) == "封面",
+    )
+    check(
+        "title: 全是空页返回 None",
+        publish.title_from_extract({"pages": [{"text": ""}, {"text": "   "}]}) is None,
+    )
+    _long = publish.title_from_extract({"pages": [{"text": "A" * 90 + "\n" + "B" * 90}]})
+    check("title: 截断到 80 字符", _long is not None and len(_long) <= 80)
 
     print("ALL PASS")
 

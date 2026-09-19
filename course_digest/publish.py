@@ -158,15 +158,20 @@ def resolve_fallback(first: int, page_map: dict) -> int | None:
 # ----------------------------------------------------------------------
 
 def title_from_extract(extract: dict) -> str | None:
-    """取首个非空页的第一行，清洗成单行、截断到 ~80 字符（首个非空页就是封面）。"""
+    """取首个非空页的**前两行**，用 " — " 连接、截断到 ~80 字符。
+
+    首个非空页就是封面，第一行是课程名、第二行才是「Lecture 2: C++ Fundamentals」
+    这类副标题 —— 只取第一行会把副标题丢掉（2026-09-19 老大拍板改成两行）。
+    只有一个非空行时不加分隔符。
+    """
     for page in extract.get("pages", []):
         text = (page.get("text") or "").strip()
         if not text:
             continue
-        for line in text.splitlines():
-            first = re.sub(r"\s+", " ", line).strip()
-            if first:
-                return first[:_TITLE_MAX]
+        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+        lines = [line for line in lines if line][:2]
+        if lines:
+            return " — ".join(lines)[:_TITLE_MAX]
     return None
 
 
