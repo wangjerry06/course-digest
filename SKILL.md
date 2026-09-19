@@ -19,7 +19,8 @@ description: 课件总结：把 PDF 课件压成带页锚点的 Markdown 总结�
 
 - macOS（MVP 只保证 macOS）；Python 3.10+（`str | None` 注解在 3.10 才允许运行时求值）
 - **零额外依赖**：`pypdf` 与前端库（PDF.js / marked / KaTeX / highlight.js）都已 vendor 在本仓库
-- 命令都在**本 skill 仓库根目录**执行；下文用 `python3 -m course_digest ...` 表示
+- 下文命令都在**本 skill 的根目录（即本 `SKILL.md` 所在目录）**执行；
+  `python3 -m course_digest ...` 指的是这个目录下的包，不在这个目录跑会报 `No module named course_digest`
 
 ## 四步执行链
 
