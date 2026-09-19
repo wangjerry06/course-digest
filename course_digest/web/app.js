@@ -540,28 +540,9 @@ function updateVersionButtons() {
 }
 
 /* ------------------------------------------------------------------ *
- * 导出（F5）：MD 已在本地磁盘，页面只提供复制 / 下载
+ * 导出（F5）：MD 已在本地磁盘，页面只提供「下载」
+ * （「复制 MD」按钮 2026-09-19 裁掉 —— 下载已覆盖保存需求，复制源码无额外价值）
  * ------------------------------------------------------------------ */
-
-async function copyMd() {
-  const md = state.data.summary_md || '';
-  try {
-    await navigator.clipboard.writeText(md);
-    setStatus('已复制 MD');
-  } catch (e) {
-    // 非安全上下文或权限被拒 → 退回 execCommand
-    const ta = document.createElement('textarea');
-    ta.value = md;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand('copy');
-    ta.remove();
-    setStatus(ok ? '已复制 MD' : '复制失败，请手动选择');
-  }
-  setTimeout(() => setStatus(''), 1500);
-}
 
 function downloadMd() {
   const md = state.data.summary_md || '';
@@ -582,7 +563,6 @@ function downloadMd() {
 
 function wireInteractions() {
   $('#md').addEventListener('click', onMdClick);
-  $('#btn-copy').addEventListener('click', copyMd);
   $('#btn-download').addEventListener('click', downloadMd);
   document.querySelectorAll('#version-switch button').forEach((b) => {
     b.addEventListener('click', () => switchVersion(b.dataset.version));
