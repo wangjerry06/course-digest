@@ -25,7 +25,7 @@ import difflib
 import re
 from pathlib import Path
 
-# 短页豁免阈值：归一化后 < 50 字符的页不参与包含/相似度合并（见 ADR-012 / 实施方案 §六）。
+# 短页豁免阈值：归一化后 < 50 字符的页不参与包含/相似度合并（见 ADR-012）。
 SHORT_PAGE_CHARS = 50
 
 # 组内一致性校验下限：非保留页相对保留页的 coverage 低于此值就拆出独立成组。

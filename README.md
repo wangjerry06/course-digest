@@ -98,6 +98,8 @@ python3 -m course_digest publish 2026-09-19-03-transport --summary /tmp/summary.
 - **核心流程收敛成 CLI**（ADR-011）：确定性的事（提文本、压缩、落盘、起服务）交给命令，
   判断性的事（写总结、判无关页）留给 agent。这样换 harness 只需一份 `SKILL.md`。
 
+全部 14 条设计决策的摘要在 [`DECISIONS.md`](./DECISIONS.md) —— 代码注释里引用的 `ADR-0xx` 编号在那里能查到。
+
 ## 已知限制
 
 - 只保证 macOS；Windows 部署未验证（代码里已避免平台专有工具，但没机器可测）

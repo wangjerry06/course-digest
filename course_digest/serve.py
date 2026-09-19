@@ -3,7 +3,7 @@
 只绑 127.0.0.1（ADR-002：不出本机、不触发防火墙弹窗），只用标准库
 （ThreadingHTTPServer），零额外依赖。
 
-寻址必须与 M3 前端对齐：index.html / app.js 用的是**根路径相对寻址**
+寻址必须与前端对齐：index.html / app.js 用的是**根路径相对寻址**
 （`./app.js`、`./vendor/**`、`./fixture/mock.json`），所以 web/ 下的文件要服务在
 **根下同名路径**上，不能只挂在 /static/。
 

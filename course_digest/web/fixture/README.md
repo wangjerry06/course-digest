@@ -12,7 +12,7 @@
 
 ```bash
 cd course_digest/web/fixture
-cp "/Users/wangjian/Desktop/CSC3200/lecture-02-cpp-fundamentals.pdf" sample-full.pdf
+cp ~/Desktop/CSC3200/lecture-02-cpp-fundamentals.pdf sample-full.pdf
 cp ~/.course-digest/docs/2026-09-18-lecture-02-cpp-fundamentals/simplified.pdf sample-simplified.pdf
 ```
 
@@ -28,5 +28,5 @@ PDF 走 `/api/doc/<id>/pdf?version=...`，数据在 `~/.course-digest/`（ADR-01
 - `meta` 的字段值也与真实课件一致
 - `summary_md` 是示例文案，但**锚点落在真实页码上**，且覆盖三类情形：
   指向保留页 / 指向已删页（测回退）/ 跨多个页号
-- 字段名与 `GET /api/doc/<id>` 的返回体一致（见 `实施方案.md` §三），
+- 字段名与 `GET /api/doc/<id>` 的返回体一致（见 `README.md` 的「数据与代码分开放」），
   只有 `pdf_full` / `pdf_simplified` 是本地文件路径而非 API URL

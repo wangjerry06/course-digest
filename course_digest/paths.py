@@ -16,7 +16,7 @@ PID_FILE = DATA_DIR / "pid"
 # 前端静态资源目录（skill 包内，ADR-014；服务只读不写）。
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
-# docId 白名单（防路径遍历，见实施方案 §三）。
+# docId 白名单（防路径遍历）。
 DOC_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 

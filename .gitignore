@@ -8,3 +8,13 @@ course_digest/web/fixture/*.pdf
 
 # macOS 垃圾文件
 .DS_Store
+
+# 内部工作文档（不进公开仓库；本地留档在 ../course-digest-docs/）
+初方案.md
+实施方案.md
+决策记录.md
+MVP边界.md
+项目日志.md
+提示词-P2.md
+修正提示词-P1-FIX.md
+修正提示词-P3-FIX.md
