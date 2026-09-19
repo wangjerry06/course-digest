@@ -115,6 +115,10 @@ python3 -m course_digest publish 2026-09-19-03-transport --summary /tmp/summary.
   用户不容易发现这里可点）
 - **左右分栏可拖拽**：分界线上加手柄，PDF 变窄的同时 MD 变宽，比例记到 `localStorage`
 
+## 版本历史
+
+见 [`CHANGELOG.md`](./CHANGELOG.md)（当前 **v0.1.0** — 首个可用版本）。
+
 ## 许可证
 
 MIT
