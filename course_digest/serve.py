@@ -157,6 +157,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # 不接受 MIME 嗅探：类型发了什么就是什么（错就让它错得明显）
+        self.send_header("X-Content-Type-Options", "nosniff")
         # 不发 Access-Control-Allow-Origin：本服务不开放给其他源
         for key, value in (extra or {}).items():
             self.send_header(key, value)
@@ -205,6 +207,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._error(404, "not found (SPA 路由只认 /doc/<id>)")
             if not paths.DOC_ID_RE.match(rest):
                 return self._error(400, "invalid docId")
+            # 文档不存在就直接 404。否则 /doc/app.js 这种「相对路径残留」会被当成 docId，
+            # 静默返回一份 HTML，前端又卡在「加载中…」（2026-09-19 的坑）。
+            if not (paths.DOCS_DIR / rest).is_dir():
+                return self._error(404, f"doc not found: {rest}")
             return self._serve_static("index.html")
 
         if path.startswith("/static/"):
