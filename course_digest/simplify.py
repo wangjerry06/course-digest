@@ -129,51 +129,57 @@ def _write_subset(source: Path, orig_pages: list[int], dest: Path) -> None:
             writer.write(out_fh)
 
 
+class SimplifyError(Exception):
+    """简化失败。调用方决定怎么报告（CLI 打 stderr，publish 转成自己的错误）。"""
+
+
 def _fail(message: str) -> int:
     print(f"error: {message}", file=sys.stderr)
     return 1
 
 
-def run(args) -> int:
-    try:
-        doc_dir = paths.doc_dir(args.doc_id)
-    except ValueError as exc:
-        return _fail(str(exc))
+def simplify_doc(doc_dir: Path, drop: str | None = None) -> dict:
+    """生成 simplified.pdf + page-map.json，返回 page_map。
 
+    不打印、不退出：失败抛 SimplifyError。publish 直接调这个函数（不 spawn 子进程），
+    CLI 的 run() 只负责把结果和错误打出来。
+    """
     source = doc_dir / "source.pdf"
     extract_path = doc_dir / "extract.json"
     if not source.is_file():
-        return _fail(f"source.pdf not found for doc '{args.doc_id}'")
+        raise SimplifyError(f"source.pdf not found for doc '{doc_dir.name}'")
     if not extract_path.is_file():
-        return _fail(f"extract.json not found for doc '{args.doc_id}'; run extract first")
+        raise SimplifyError(
+            f"extract.json not found for doc '{doc_dir.name}'; run extract first"
+        )
 
     # 纯读：extract.json 是判定结果的唯一来源，simplify 不重算、也不改写它。
     try:
         result = json.loads(extract_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        return _fail(f"cannot read {extract_path}: {exc}")
+        raise SimplifyError(f"cannot read {extract_path}: {exc}") from exc
 
     total = len(result["pages"])
     try:
         with open(source, "rb") as fh:
             source_pages = len(PdfReader(fh).pages)
     except Exception as exc:
-        return _fail(f"cannot read {source}: {exc}")
+        raise SimplifyError(f"cannot read {source}: {exc}") from exc
     if source_pages != total:
-        return _fail(
+        raise SimplifyError(
             f"source.pdf has {source_pages} pages but extract.json describes {total}; "
             f"re-run extract"
         )
 
     try:
-        manual = set(parse_drop(args.drop, total)) if args.drop else set()
+        manual = set(parse_drop(drop, total)) if drop else set()
     except ValueError as exc:
-        return _fail(str(exc))
+        raise SimplifyError(str(exc)) from exc
 
     try:
         page_map = build_page_map(total, result["groups"], manual)
     except ValueError as exc:
-        return _fail(str(exc))
+        raise SimplifyError(str(exc)) from exc
 
     # 要写进 PDF 的原页号直接由映射反查得出，保证 PDF 与 page-map 不可能对不上。
     kept_orig = [
@@ -186,7 +192,7 @@ def run(args) -> int:
     if not (
         non_null == page_map["total_simplified"] == len(kept_orig) == len(page_map["simp_to_orig"])
     ):
-        return _fail(
+        raise SimplifyError(
             f"inconsistent page-map: {non_null} kept entries vs "
             f"total_simplified={page_map['total_simplified']} vs {len(kept_orig)} pages to write"
         )
@@ -204,13 +210,26 @@ def run(args) -> int:
         tmp_pdf.replace(doc_dir / "simplified.pdf")
     except Exception as exc:
         tmp_pdf.unlink(missing_ok=True)
-        return _fail(f"failed to write simplified.pdf: {exc}")
+        raise SimplifyError(f"failed to write simplified.pdf: {exc}") from exc
 
     tmp_map = doc_dir / "page-map.json.tmp"
     tmp_map.write_text(
         json.dumps(page_map, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     tmp_map.replace(doc_dir / "page-map.json")
+    return page_map
+
+
+def run(args) -> int:
+    try:
+        doc_dir = paths.doc_dir(args.doc_id)
+    except ValueError as exc:
+        return _fail(str(exc))
+
+    try:
+        page_map = simplify_doc(doc_dir, args.drop)
+    except SimplifyError as exc:
+        return _fail(str(exc))
 
     by_reason = {"dup": 0, "manual": 0}
     for item in page_map["dropped"]:

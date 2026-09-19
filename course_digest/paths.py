@@ -9,6 +9,13 @@ DATA_DIR = Path.home() / ".course-digest"
 # 文档库目录：每个 docId 一个子目录。
 DOCS_DIR = DATA_DIR / "docs"
 
+# 服务实际端口 / 服务进程号（ADR-010：agent 读 port 构造 URL，stop 读 pid 停服务）。
+PORT_FILE = DATA_DIR / "port"
+PID_FILE = DATA_DIR / "pid"
+
+# 前端静态资源目录（skill 包内，ADR-014；服务只读不写）。
+WEB_DIR = Path(__file__).resolve().parent / "web"
+
 # docId 白名单（防路径遍历，见实施方案 §三）。
 DOC_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
