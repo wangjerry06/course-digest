@@ -194,13 +194,17 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             return self._error(404, "unknown api endpoint")
 
-        # SPA：/ 与 /doc/<id> 都返回同一份 index.html
-        if path == "/" or path.startswith("/doc/"):
-            rest = path[len("/doc/"):] if path.startswith("/doc/") else ""
-            if rest:
-                doc_id = rest.split("/")[0]
-                if not paths.DOC_ID_RE.match(doc_id):
-                    return self._error(400, "invalid docId")
+        # SPA：只有 / 与 /doc/<id>（允许结尾斜杠）返回 index.html。
+        # 更深一层（/doc/app.js、/doc/vendor/...）一律 404 —— 这类请求只可能来自
+        # 「页面里写了相对路径」，必须大声失败，不能静默回一份 HTML（2026-09-19 踩过）。
+        if path == "/":
+            return self._serve_static("index.html")
+        if path.startswith("/doc/"):
+            rest = path[len("/doc/"):].strip("/")
+            if not rest or "/" in rest:
+                return self._error(404, "not found (SPA 路由只认 /doc/<id>)")
+            if not paths.DOC_ID_RE.match(rest):
+                return self._error(400, "invalid docId")
             return self._serve_static("index.html")
 
         if path.startswith("/static/"):

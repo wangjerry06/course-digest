@@ -11,7 +11,7 @@
  *   - 不用内置 viewer.html（iframe 跨文档，联动做不了）
  */
 
-import * as pdfjsLib from './vendor/pdfjs/pdf.min.mjs';
+import * as pdfjsLib from '/vendor/pdfjs/pdf.min.mjs';
 
 /* 前后各预加载的页数 */
 const PRELOAD_PAGES = 2;
@@ -21,7 +21,7 @@ const MAX_SCALE = 2;
 const FETCH_TIMEOUT_MS = 5000;
 const PDF_TIMEOUT_MS = 15000;
 
-const VENDOR = './vendor/pdfjs/';
+const VENDOR = '/vendor/pdfjs/';
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -79,7 +79,7 @@ async function fetchDocData() {
   const params = new URLSearchParams(location.search);
 
   if (params.has('mock')) {
-    return fetchJson('./fixture/mock.json');
+    return fetchJson('/fixture/mock.json');
   }
 
   const id = docIdFromUrl(params);
@@ -277,7 +277,8 @@ function renderMarkdown() {
  * PDF：加载 / 布局 / 虚拟化渲染
  * ------------------------------------------------------------------ */
 
-const workerUrl = new URL('./vendor/pdfjs/pdf.worker.min.mjs', import.meta.url).href;
+/* 根绝对路径：页面在 /doc/<id> 时，相对路径会变成 /doc/vendor/... 被 SPA 路由吞掉 */
+const workerUrl = '/vendor/pdfjs/pdf.worker.min.mjs';
 
 let statusRetry = null;
 

@@ -5,11 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>course-digest</title>
 
-<!-- 全部本地 vendor，无 CDN（ADR-004：断网可用） -->
-<link rel="stylesheet" href="./vendor/pdfjs/pdf_viewer.css">
-<link rel="stylesheet" href="./vendor/katex/katex.min.css">
-<link rel="stylesheet" href="./vendor/highlight.js/github.min.css">
-<link rel="stylesheet" href="./style.css">
+<!-- 全部本地 vendor，无 CDN（ADR-004：断网可用）
+     路径用**根绝对路径**：页面在 /doc/<id> 下时，./vendor 会被解析成 /doc/vendor/...
+     → 撞上 SPA 路由，拿回一份 HTML，模块脚本直接被浏览器拒执行 -->
+<link rel="stylesheet" href="/vendor/pdfjs/pdf_viewer.css">
+<link rel="stylesheet" href="/vendor/katex/katex.min.css">
+<link rel="stylesheet" href="/vendor/highlight.js/github.min.css">
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
 
@@ -48,11 +50,11 @@
 </main>
 
 <!-- 经典脚本（UMD）：先于 module 执行，全局在 app.js 运行前就绪 -->
-<script src="./vendor/marked/marked.umd.js"></script>
-<script src="./vendor/katex/katex.min.js"></script>
-<script src="./vendor/katex/auto-render.min.js"></script>
-<script src="./vendor/highlight.js/highlight.min.js"></script>
+<script src="/vendor/marked/marked.umd.js"></script>
+<script src="/vendor/katex/katex.min.js"></script>
+<script src="/vendor/katex/auto-render.min.js"></script>
+<script src="/vendor/highlight.js/highlight.min.js"></script>
 
-<script type="module" src="./app.js"></script>
+<script type="module" src="/app.js"></script>
 </body>
 </html>
