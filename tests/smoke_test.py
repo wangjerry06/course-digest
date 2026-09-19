@@ -479,7 +479,7 @@ def main():
         finally:
             paths.DOCS_DIR = saved
 
-    # --- P5：meta.title 取首个非空页的前两行（2026-09-19 老大拍板）---
+    # --- meta.title 取首个非空页的前两行（2026-09-19 起）---
     check(
         "title: 取前两行、用 — 连接",
         publish.title_from_extract({"pages": [{"text": "第一行\n第二行\n第三行"}]})
