@@ -1,0 +1,227 @@
+/* course-digest 查看器样式。
+   布局：CSS Grid 2fr 1fr，两侧各自占满视口高度、各自独立滚动（<900px 降级为上下堆叠）。
+   PDF 页容器上定义 pdf.js 需要的那组 CSS 变量 —— 我们没走内置 viewer，
+   官方 pdf_viewer.css 里的 .pdfViewer/.page 规则不会命中我们的元素，必须自己声明。 */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #f5f5f7;
+  color: #1d1d1f;
+  font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+/* ---------- 顶栏 ---------- */
+
+#topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  height: 48px;
+  padding: 0 16px;
+  background: #fff;
+  border-bottom: 1px solid #d8d8dc;
+}
+
+.brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+#doc-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#doc-sub { color: #6e6e73; font-size: 12px; white-space: nowrap; }
+
+.actions { display: flex; align-items: center; gap: 8px; flex: none; }
+
+button {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 12px;
+  border: 1px solid #c8c8cc;
+  border-radius: 6px;
+  background: #fff;
+  color: #1d1d1f;
+  cursor: pointer;
+}
+button:hover { background: #f0f0f2; }
+button:active { background: #e6e6e9; }
+
+.segmented { display: flex; }
+.segmented button { border-radius: 0; margin-left: -1px; }
+.segmented button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.segmented button:last-child { border-radius: 0 6px 6px 0; }
+.segmented button.active {
+  background: #0066cc;
+  border-color: #0066cc;
+  color: #fff;
+  position: relative;
+  z-index: 1;
+}
+
+/* ---------- 主体网格 ---------- */
+
+#layout {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  height: calc(100vh - 48px);
+  min-height: 0;              /* 让子项能真正滚动 */
+}
+
+#pdf-pane, #md-pane {
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+#pdf-pane { border-right: 1px solid #d8d8dc; background: #3a3a3c; }
+
+#pdf-scroll, #md-scroll {
+  height: 100%;
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+@media (max-width: 900px) {
+  #layout { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; height: calc(100vh - 48px); }
+  #pdf-pane { border-right: none; border-bottom: 1px solid #d8d8dc; }
+}
+
+/* ---------- 左：PDF 页 ---------- */
+
+#pdf-pages { padding: 12px; }
+
+/* 每页一个容器；高度由 JS 按 MediaBox 提前算好写进 style，
+   所以滚动条总长度从第一帧就是准的，跳转不会漂。 */
+.cd-page {
+  position: relative;               /* textLayer 的 absolute 定位基准 */
+  margin: 0 auto 12px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+
+  /* pdf.js 的 TextLayer / setLayerDimensions 依赖这组变量。
+     --scale-factor 由 JS 按当前渲染比例覆盖。 */
+  --scale-factor: 1;
+  --user-unit: 1;
+  --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+}
+
+.cd-page > canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 未渲染时的占位：显示页码，避免大片空白看着像坏了 */
+.cd-page .page-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #b8b8bd;
+  font-size: 13px;
+  user-select: none;
+}
+
+/* 高亮跳转目标（JS 加 .flash，短暂闪一下） */
+.cd-page.flash::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 3px solid #ff9f0a;
+  pointer-events: none;
+  animation: cd-flash 1.4s ease-out forwards;
+}
+@keyframes cd-flash {
+  0%, 60% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.status {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, .65);
+  color: #fff;
+  font-size: 12px;
+}
+
+/* ---------- 右：Markdown ---------- */
+
+#md-scroll { background: #fff; }
+
+#md {
+  max-width: 46em;
+  margin: 0 auto;
+  padding: 20px 24px 64px;
+}
+
+/* 当前被点击的段落短暂高亮（ADR-007 单向联动） */
+#md .md-active {
+  background: #fff4d6;
+  box-shadow: 0 0 0 6px #fff4d6;
+  border-radius: 3px;
+  transition: background .4s, box-shadow .4s;
+}
+
+#md h2 {
+  font-size: 17px;
+  margin: 1.6em 0 .6em;
+  padding-bottom: .25em;
+  border-bottom: 1px solid #e6e6e9;
+}
+#md h2:first-child { margin-top: 0; }
+#md hr { border: none; border-top: 1px solid #ececf0; margin: 1.8em 0; }
+#md p, #md li { color: #333; }
+#md code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .88em;
+  background: #f3f3f6;
+  padding: .12em .35em;
+  border-radius: 4px;
+}
+#md pre {
+  background: #f7f7fa;
+  border: 1px solid #e6e6e9;
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+}
+#md pre code { background: none; padding: 0; }
+#md table { border-collapse: collapse; font-size: 13px; }
+#md th, #md td { border: 1px solid #e0e0e4; padding: 4px 10px; text-align: left; }
+#md th { background: #f7f7fa; }
+
+/* 段落可点：提示这是联动入口 */
+#md [data-pages] { cursor: pointer; }
+#md [data-pages]:hover { background: #f0f7ff; }
+
+/* 「此处略过原 PX–PY」提示条（ADR-013 信任要求） */
+.skipped-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 1.2em 0;
+  padding: 6px 12px;
+  border-left: 3px solid #ff9f0a;
+  background: #fffaf0;
+  color: #8a5a00;
+  font-size: 12.5px;
+  border-radius: 0 6px 6px 0;
+}
+.skipped-banner button { padding: 2px 8px; font-size: 12px; flex: none; }
+
+/* 锚点指向已删页、连回退都失败时（理论分支）只高亮不滚动 */
+.skipped-banner.no-target { border-left-color: #b8b8bd; color: #6e6e73; background: #f7f7fa; }
+
+@media print {
+  #topbar, #pdf-pane { display: none; }
+  #layout { display: block; height: auto; }
+}

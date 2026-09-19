@@ -1,3 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# fixture 里的课件 PDF（第三方版权，不入公开仓库）
+# 本地开发 / 手测前按 course_digest/web/fixture/README.md 拷一份即可
+course_digest/web/fixture/*.pdf

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>course-digest</title>
+
+<!-- 全部本地 vendor，无 CDN（ADR-004：断网可用） -->
+<link rel="stylesheet" href="./vendor/pdfjs/pdf_viewer.css">
+<link rel="stylesheet" href="./vendor/katex/katex.min.css">
+<link rel="stylesheet" href="./vendor/highlight.js/github.min.css">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<header id="topbar">
+  <div class="brand">
+    <span id="doc-title">加载中…</span>
+    <span id="doc-sub" class="sub"></span>
+  </div>
+
+  <div class="actions">
+    <div class="segmented" id="version-switch" role="group" aria-label="PDF 版本">
+      <button type="button" data-version="simplified" class="active">简化版</button>
+      <button type="button" data-version="full">完整版</button>
+    </div>
+    <button type="button" id="btn-copy">复制 MD</button>
+    <button type="button" id="btn-download">下载 MD</button>
+  </div>
+</header>
+
+<main id="layout">
+
+  <!-- 左：PDF。自有 canvas 列表 + 虚拟化（ADR-005），不用内置 viewer.html -->
+  <section id="pdf-pane" aria-label="课件原文">
+    <div id="pdf-scroll">
+      <div id="pdf-pages"></div>
+    </div>
+    <div id="pdf-status" class="status" hidden></div>
+  </section>
+
+  <!-- 右：Markdown 总结 -->
+  <aside id="md-pane" aria-label="总结">
+    <div id="md-scroll">
+      <article id="md"></article>
+    </div>
+  </aside>
+
+</main>
+
+<!-- 经典脚本（UMD）：先于 module 执行，全局在 app.js 运行前就绪 -->
+<script src="./vendor/marked/marked.umd.js"></script>
+<script src="./vendor/katex/katex.min.js"></script>
+<script src="./vendor/katex/auto-render.min.js"></script>
+<script src="./vendor/highlight.js/highlight.min.js"></script>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>

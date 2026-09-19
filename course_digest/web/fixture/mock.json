@@ -1,0 +1,1534 @@
+{
+  "meta": {
+    "id": "2026-09-18-lecture-02-cpp-fundamentals",
+    "title": "CSC 3200 Data Structures and Advanced Programming — Lecture 2: C++ Fundamentals",
+    "created": "2026-09-18T11:01:37+08:00",
+    "original_pages": 285,
+    "simplified_pages": 52,
+    "has_simplified": true
+  },
+  "summary_md": "## 课程信息\n\n<!-- pages: 1 -->\n\n**CSC 3200 Data Structures and Advanced Programming — Lecture 2: C++ Fundamentals**\n授课：Jingbang Chen（School of Data Science, CUHK-Shenzhen）。\n\n本节从 Java/Python 的使用者视角切入，讲清 C++ 里**类型和运算细节为什么必须显式写出来**。\n\n---\n\n## 环境与第一个程序\n\n<!-- pages: 2,3,4 -->\n\n本节锚点指向的三页在简化版里都已被删（与后续页重复），点击本段用于验证**回退规则**：应跳到原 P2 之后最近的保留页。\n\n默认程序骨架固定为：`#include <iostream>` 写在最上面，函数与类型定义写在 `main()` 之外，课堂上还讨论了 `std::cin` / `std::cout`。\n\n```cpp\n#include <iostream>\n\nint main() {\n    std::cout << \"Hello, CSC 3200\\n\";\n    return 0;\n}\n```\n\n---\n\n## 编译与执行流程\n\n<!-- pages: 12,13,14 -->\n\n三者的执行路径不同：\n\n| 语言 | 路径 |\n|---|---|\n| Python | 源码 → Python 运行时 → 执行 |\n| Java | 源码 → 字节码 → JVM → 执行 |\n| C++ | 源码 → 编译器 → **可执行文件** → 执行 |\n\nC++ 多出「编译产物」这一环，因此编译成功与运行成功是**两个独立步骤**：\n\n```bash\ng++ -std=c++20 main.cpp -o main\n./main\n```\n\n---\n\n## 常用编译器选项\n\n<!-- pages: 16,17,18 -->\n\n| 选项 | 作用 |\n|---|---|\n| `-std=c++20` | 选定 C++20 语言规则 |\n| `-Wall -Wextra` | 打开大量有用警告（不保证查出所有 bug） |\n| `-g` | 保留调试信息（源码行号、变量） |\n| `-o main` | 指定输出可执行文件名 |\n| `-O2` | 打开优化；测性能时使用 |\n| `-fsanitize=undefined` | 运行时检查未定义行为，含带符号溢出 |\n\n注意：Dev-C++ 自带的 GCC 可能过旧，不支持上表中的选项。\n\n---\n\n## 类型检查发生的时机\n\n<!-- pages: 21,22,23,24,25,26 -->\n\n同样是「两个字符串相乘」，不同语言表现完全不同：\n\n```python\nhello = \"Hello \"\nworld = \"World!\"\nprint(hello * world)      # 运行时才报错\n```\n\n```cpp\nstd::string hello = \"Hello \";\nstd::string world = \"World!\";\nstd::cout << hello * world;   // 编译期就报错，程序根本无法启动\n```\n\n这一节的核心结论：**静态类型检查把错误提前到了运行之前**。\n\n---\n\n## 整数类型与位宽\n\n<!-- pages: 31,32,33 -->\n\n$w$ 位可以表示 $2^w$ 种不同的位模式。因此 16 位整数能表示 $2^{16} = 65536$ 个不同的值。\n\n常见类型的取值范围（用 `sizeof` / `std::numeric_limits` 查，不要凭记忆）：\n\n```cpp\nstd::cout << sizeof(int) << '\\n';                    // 通常是 4\nstd::cout << std::numeric_limits<int>::max() << '\\n'; // 2147483647\n```\n\n---\n\n## 变量声明与未初始化\n\n<!-- pages: 42,43,44,45,46,47,48,49 -->\n\n声明只分配空间、不写入值；**读取未初始化的局部变量是未定义行为**：\n\n```cpp\nint count;                    // 只有空间，没有值\nstd::cout << count;           // 未定义行为：可能打印垃圾值\n```\n\n$$\n\\text{未初始化} \\neq 0\n$$\n\nC++ 不会帮你清零。要么初始化，要么在赋值前不要读。\n\n---\n\n## 算符与优先级\n\n<!-- pages: 70,71,72,73 -->\n\n一元 / 二元运算符的区别先分清：`-x` 是一元取负，`a - b` 是二元减法。\n\n前缀与后缀自增都让 $x$ 加 1，但**表达式给出的值不同**：\n\n```cpp\nint x = 5;\nint a = ++x;   // x 先变 6，a = 6\nint b = x++;   // b = 6，x 再变 7\n```\n\n优先级表从高到低读，括号永远可以覆盖默认优先级。\n\n---\n\n## 整数除法与取余\n\n<!-- pages: 76,80,84 -->\n\n整数相除**向零截断**，把结果赋给 `double` 不会改变这个事实：\n\n```cpp\nint a = 7, b = 2;\ndouble half = a / b;          // 结果是 3.0，不是 3.5\ndouble real = a / 2.0;        // 3.5：有一个操作数是浮点\n```\n\n对合法的整数除法，恒等式为：\n\n$$a = (a / b) \\times b + a \\% b$$\n\n负数取余的符号跟随被除数，这一点与 Python 不同。\n\n---\n\n## 溢出与回绕\n\n<!-- pages: 89,94,100,106 -->\n\n32 位 `int` 的最大值是 2,147,483,647，再加 1 就是**带符号溢出**：\n\n```cpp\nint x = 2147483647;\nx = x + 1;                    // 未定义行为\n```\n\n机器指令可能只保留低 32 位，所以程序「看起来还能跑」，但优化器可以假设溢出永不发生，从而做出反直觉的变换。\n\n- **无符号**运算则是良定义的：按 $2^w$ 取模回绕。\n- 在表达式**计算之前**先把操作数加宽，才能避免溢出；赋值给更宽的类型救不回来。\n\n---\n\n## 布尔表达式与短路求值\n\n<!-- pages: 118,125,130 -->\n\n`&&` / `||` **从左往右短路**：左边一旦能定结果，右边根本不求值。\n\n```cpp\nif (i < n && a[i] == target) {   // 靠短路挡住越界访问\n    ...\n}\n```\n\n依赖短路来保证正确性是有风险的写法 —— 它把「数组下标是否合法」这件事藏进了求值顺序里。\n\nPython 的 `0 <= x <= 100` 是两个比较的连接，C++ 没有这种链式比较，必须写成 `0 <= x && x <= 100`。\n\n---\n\n## 控制流\n\n<!-- pages: 139,144,149,157,162 -->\n\n三种循环与跳转的对照：\n\n```cpp\nfor (int i = 0; i < n; ++i) { /* 计数循环 */ }\n\nint remaining = 3;\nwhile (remaining > 0) { --remaining; }\n\ndo { /* 至少执行一次 */ } while (choice != 0);\n```\n\n`break` 跳出整个循环，`continue` 跳到下一次迭代，`exit` 直接结束进程。\n\n常见错误是**多迭代一次**：`i <= n` 与 `i < n` 要按数据范围核对。\n\n---\n\n## 课间休息\n\n<!-- pages: 163,164,165,166,167 -->\n\n原 P163 是一页「10-Minute Break」，它**没有**被算法当作重复页删掉 —— 这正是组内一致性校验（coverage guard）在真实数据上救回来的页：如果阈值被调低，它会被并进相邻的 auto 类型推导组里静默消失。\n\n---\n\n## auto 类型推导\n\n<!-- pages: 168,173,178,183 -->\n\n`auto` 用初始化器推导类型，**不会预判后续运算**：\n\n```cpp\nauto x = 10;        // int\nx = 3.14;           // 变成 int(3)：不是把 x 变成 double\n```\n\n推导发生在「表达式求值之后」，所以先确定表达式类型，再决定变量类型。\n\n---\n\n## struct\n\n<!-- pages: 193,198,204,210,211 -->\n\n`std::pair` 只能装两个值，且没有语义名字；需要记录多个字段时用 `struct` 定义新类型：\n\n```cpp\nstruct QuadraticResult {\n    bool hasRealRoots;\n    double root1, root2;\n};\n\nQuadraticResult r{true, 1.0, 2.0};\nif (r.hasRealRoots) { std::cout << r.root1 << '\\n'; }\n```\n\n用 `.` 读写成员；内置类型（如 `int`）支持的四则运算与比较，自定义 `struct` **不会自动获得**。\n\n---\n\n## 练习：LeetCode\n\n<!-- pages: 225,235,245,255,262,273 -->\n\n| 题号 | 题目 | 难度 |\n|---|---|---|\n| 1342 | Reduce a Number to Zero | Easy |\n| 1281 | Digits: Product Minus Sum | Easy |\n| 509 | Iterative Fibonacci | Easy |\n| 9 | Palindrome Number | Easy |\n| 991 | Broken Calculator | Medium |\n\nBroken Calculator 的解法是**反向操作**：从 target 往 start 走，能除 2 就除 2，否则加 1。\n\n---\n\n## 帮助资源\n\n<!-- pages: 281,282,283 -->\n\n- `cplusplus.com`：查标准库参考\n- 《C++ Primer》：系统读本\n\n本节锚点指向的原 P281–P283 都已被删（与前后页重复），点击本段应回退到其后最近的保留页 **原 P284**。\n\n---\n\n## 小结\n\n<!-- pages: 284,285 -->\n\n本节的三个要点：\n\n1. C++ 把类型与执行细节**显式**写出来，代价是啰嗦，收益是错误提前暴露。\n2. 操作数类型决定算术结果：整数除法截断、带符号溢出未定义、无符号按 $2^w$ 回绕。\n3. 静态类型绑定让变量类型固定，`auto` 只是省去书写，并不改变这条规则。\n",
+  "page_map": {
+    "total_original": 285,
+    "total_simplified": 52,
+    "orig_to_simp": {
+      "1": 1,
+      "2": null,
+      "3": null,
+      "4": null,
+      "5": null,
+      "6": null,
+      "7": 2,
+      "8": null,
+      "9": null,
+      "10": null,
+      "11": null,
+      "12": null,
+      "13": 3,
+      "14": null,
+      "15": null,
+      "16": 4,
+      "17": null,
+      "18": null,
+      "19": null,
+      "20": null,
+      "21": 5,
+      "22": null,
+      "23": null,
+      "24": null,
+      "25": null,
+      "26": 6,
+      "27": null,
+      "28": null,
+      "29": null,
+      "30": null,
+      "31": 7,
+      "32": null,
+      "33": 8,
+      "34": null,
+      "35": null,
+      "36": null,
+      "37": null,
+      "38": null,
+      "39": null,
+      "40": null,
+      "41": null,
+      "42": 9,
+      "43": null,
+      "44": null,
+      "45": null,
+      "46": null,
+      "47": null,
+      "48": null,
+      "49": 10,
+      "50": null,
+      "51": null,
+      "52": 11,
+      "53": null,
+      "54": null,
+      "55": null,
+      "56": 12,
+      "57": null,
+      "58": null,
+      "59": null,
+      "60": null,
+      "61": null,
+      "62": null,
+      "63": null,
+      "64": 13,
+      "65": null,
+      "66": null,
+      "67": null,
+      "68": null,
+      "69": null,
+      "70": 14,
+      "71": null,
+      "72": null,
+      "73": 15,
+      "74": null,
+      "75": null,
+      "76": 16,
+      "77": null,
+      "78": null,
+      "79": null,
+      "80": 17,
+      "81": null,
+      "82": null,
+      "83": null,
+      "84": 18,
+      "85": null,
+      "86": null,
+      "87": null,
+      "88": null,
+      "89": 19,
+      "90": null,
+      "91": null,
+      "92": null,
+      "93": null,
+      "94": 20,
+      "95": null,
+      "96": null,
+      "97": null,
+      "98": null,
+      "99": null,
+      "100": 21,
+      "101": null,
+      "102": null,
+      "103": null,
+      "104": null,
+      "105": null,
+      "106": 22,
+      "107": null,
+      "108": null,
+      "109": null,
+      "110": null,
+      "111": null,
+      "112": 23,
+      "113": null,
+      "114": null,
+      "115": null,
+      "116": null,
+      "117": null,
+      "118": 24,
+      "119": null,
+      "120": null,
+      "121": null,
+      "122": null,
+      "123": null,
+      "124": null,
+      "125": 25,
+      "126": null,
+      "127": null,
+      "128": null,
+      "129": null,
+      "130": 26,
+      "131": null,
+      "132": null,
+      "133": 27,
+      "134": null,
+      "135": null,
+      "136": null,
+      "137": null,
+      "138": null,
+      "139": 28,
+      "140": null,
+      "141": null,
+      "142": null,
+      "143": null,
+      "144": 29,
+      "145": null,
+      "146": null,
+      "147": null,
+      "148": null,
+      "149": 30,
+      "150": null,
+      "151": null,
+      "152": null,
+      "153": null,
+      "154": null,
+      "155": null,
+      "156": null,
+      "157": 31,
+      "158": null,
+      "159": null,
+      "160": null,
+      "161": null,
+      "162": 32,
+      "163": 33,
+      "164": null,
+      "165": null,
+      "166": null,
+      "167": null,
+      "168": 34,
+      "169": null,
+      "170": null,
+      "171": null,
+      "172": null,
+      "173": 35,
+      "174": null,
+      "175": null,
+      "176": null,
+      "177": null,
+      "178": 36,
+      "179": null,
+      "180": null,
+      "181": null,
+      "182": null,
+      "183": 37,
+      "184": null,
+      "185": null,
+      "186": null,
+      "187": null,
+      "188": 38,
+      "189": null,
+      "190": null,
+      "191": null,
+      "192": null,
+      "193": 39,
+      "194": null,
+      "195": null,
+      "196": null,
+      "197": null,
+      "198": 40,
+      "199": null,
+      "200": null,
+      "201": null,
+      "202": null,
+      "203": null,
+      "204": 41,
+      "205": null,
+      "206": null,
+      "207": null,
+      "208": null,
+      "209": null,
+      "210": 42,
+      "211": 43,
+      "212": null,
+      "213": null,
+      "214": null,
+      "215": null,
+      "216": null,
+      "217": null,
+      "218": null,
+      "219": null,
+      "220": null,
+      "221": null,
+      "222": null,
+      "223": null,
+      "224": null,
+      "225": 44,
+      "226": null,
+      "227": null,
+      "228": null,
+      "229": null,
+      "230": null,
+      "231": null,
+      "232": null,
+      "233": null,
+      "234": null,
+      "235": 45,
+      "236": null,
+      "237": null,
+      "238": null,
+      "239": null,
+      "240": null,
+      "241": null,
+      "242": null,
+      "243": null,
+      "244": null,
+      "245": 46,
+      "246": null,
+      "247": null,
+      "248": null,
+      "249": null,
+      "250": null,
+      "251": null,
+      "252": null,
+      "253": null,
+      "254": null,
+      "255": 47,
+      "256": null,
+      "257": null,
+      "258": null,
+      "259": null,
+      "260": null,
+      "261": null,
+      "262": 48,
+      "263": null,
+      "264": null,
+      "265": null,
+      "266": null,
+      "267": null,
+      "268": null,
+      "269": null,
+      "270": null,
+      "271": null,
+      "272": null,
+      "273": 49,
+      "274": null,
+      "275": null,
+      "276": null,
+      "277": null,
+      "278": null,
+      "279": null,
+      "280": 50,
+      "281": null,
+      "282": null,
+      "283": null,
+      "284": 51,
+      "285": 52
+    },
+    "simp_to_orig": {
+      "1": 1,
+      "2": 7,
+      "3": 13,
+      "4": 16,
+      "5": 21,
+      "6": 26,
+      "7": 31,
+      "8": 33,
+      "9": 42,
+      "10": 49,
+      "11": 52,
+      "12": 56,
+      "13": 64,
+      "14": 70,
+      "15": 73,
+      "16": 76,
+      "17": 80,
+      "18": 84,
+      "19": 89,
+      "20": 94,
+      "21": 100,
+      "22": 106,
+      "23": 112,
+      "24": 118,
+      "25": 125,
+      "26": 130,
+      "27": 133,
+      "28": 139,
+      "29": 144,
+      "30": 149,
+      "31": 157,
+      "32": 162,
+      "33": 163,
+      "34": 168,
+      "35": 173,
+      "36": 178,
+      "37": 183,
+      "38": 188,
+      "39": 193,
+      "40": 198,
+      "41": 204,
+      "42": 210,
+      "43": 211,
+      "44": 225,
+      "45": 235,
+      "46": 245,
+      "47": 255,
+      "48": 262,
+      "49": 273,
+      "50": 280,
+      "51": 284,
+      "52": 285
+    },
+    "dropped": [
+      {
+        "page": 2,
+        "reason": "dup"
+      },
+      {
+        "page": 3,
+        "reason": "dup"
+      },
+      {
+        "page": 4,
+        "reason": "dup"
+      },
+      {
+        "page": 5,
+        "reason": "dup"
+      },
+      {
+        "page": 6,
+        "reason": "dup"
+      },
+      {
+        "page": 8,
+        "reason": "dup"
+      },
+      {
+        "page": 9,
+        "reason": "dup"
+      },
+      {
+        "page": 10,
+        "reason": "dup"
+      },
+      {
+        "page": 11,
+        "reason": "dup"
+      },
+      {
+        "page": 12,
+        "reason": "dup"
+      },
+      {
+        "page": 14,
+        "reason": "dup"
+      },
+      {
+        "page": 15,
+        "reason": "dup"
+      },
+      {
+        "page": 17,
+        "reason": "dup"
+      },
+      {
+        "page": 18,
+        "reason": "dup"
+      },
+      {
+        "page": 19,
+        "reason": "dup"
+      },
+      {
+        "page": 20,
+        "reason": "dup"
+      },
+      {
+        "page": 22,
+        "reason": "dup"
+      },
+      {
+        "page": 23,
+        "reason": "dup"
+      },
+      {
+        "page": 24,
+        "reason": "dup"
+      },
+      {
+        "page": 25,
+        "reason": "dup"
+      },
+      {
+        "page": 27,
+        "reason": "dup"
+      },
+      {
+        "page": 28,
+        "reason": "dup"
+      },
+      {
+        "page": 29,
+        "reason": "dup"
+      },
+      {
+        "page": 30,
+        "reason": "dup"
+      },
+      {
+        "page": 32,
+        "reason": "dup"
+      },
+      {
+        "page": 34,
+        "reason": "dup"
+      },
+      {
+        "page": 35,
+        "reason": "dup"
+      },
+      {
+        "page": 36,
+        "reason": "dup"
+      },
+      {
+        "page": 37,
+        "reason": "dup"
+      },
+      {
+        "page": 38,
+        "reason": "dup"
+      },
+      {
+        "page": 39,
+        "reason": "dup"
+      },
+      {
+        "page": 40,
+        "reason": "dup"
+      },
+      {
+        "page": 41,
+        "reason": "dup"
+      },
+      {
+        "page": 43,
+        "reason": "dup"
+      },
+      {
+        "page": 44,
+        "reason": "dup"
+      },
+      {
+        "page": 45,
+        "reason": "dup"
+      },
+      {
+        "page": 46,
+        "reason": "dup"
+      },
+      {
+        "page": 47,
+        "reason": "dup"
+      },
+      {
+        "page": 48,
+        "reason": "dup"
+      },
+      {
+        "page": 50,
+        "reason": "dup"
+      },
+      {
+        "page": 51,
+        "reason": "dup"
+      },
+      {
+        "page": 53,
+        "reason": "dup"
+      },
+      {
+        "page": 54,
+        "reason": "dup"
+      },
+      {
+        "page": 55,
+        "reason": "dup"
+      },
+      {
+        "page": 57,
+        "reason": "dup"
+      },
+      {
+        "page": 58,
+        "reason": "dup"
+      },
+      {
+        "page": 59,
+        "reason": "dup"
+      },
+      {
+        "page": 60,
+        "reason": "dup"
+      },
+      {
+        "page": 61,
+        "reason": "dup"
+      },
+      {
+        "page": 62,
+        "reason": "dup"
+      },
+      {
+        "page": 63,
+        "reason": "dup"
+      },
+      {
+        "page": 65,
+        "reason": "dup"
+      },
+      {
+        "page": 66,
+        "reason": "dup"
+      },
+      {
+        "page": 67,
+        "reason": "dup"
+      },
+      {
+        "page": 68,
+        "reason": "dup"
+      },
+      {
+        "page": 69,
+        "reason": "dup"
+      },
+      {
+        "page": 71,
+        "reason": "dup"
+      },
+      {
+        "page": 72,
+        "reason": "dup"
+      },
+      {
+        "page": 74,
+        "reason": "dup"
+      },
+      {
+        "page": 75,
+        "reason": "dup"
+      },
+      {
+        "page": 77,
+        "reason": "dup"
+      },
+      {
+        "page": 78,
+        "reason": "dup"
+      },
+      {
+        "page": 79,
+        "reason": "dup"
+      },
+      {
+        "page": 81,
+        "reason": "dup"
+      },
+      {
+        "page": 82,
+        "reason": "dup"
+      },
+      {
+        "page": 83,
+        "reason": "dup"
+      },
+      {
+        "page": 85,
+        "reason": "dup"
+      },
+      {
+        "page": 86,
+        "reason": "dup"
+      },
+      {
+        "page": 87,
+        "reason": "dup"
+      },
+      {
+        "page": 88,
+        "reason": "dup"
+      },
+      {
+        "page": 90,
+        "reason": "dup"
+      },
+      {
+        "page": 91,
+        "reason": "dup"
+      },
+      {
+        "page": 92,
+        "reason": "dup"
+      },
+      {
+        "page": 93,
+        "reason": "dup"
+      },
+      {
+        "page": 95,
+        "reason": "dup"
+      },
+      {
+        "page": 96,
+        "reason": "dup"
+      },
+      {
+        "page": 97,
+        "reason": "dup"
+      },
+      {
+        "page": 98,
+        "reason": "dup"
+      },
+      {
+        "page": 99,
+        "reason": "dup"
+      },
+      {
+        "page": 101,
+        "reason": "dup"
+      },
+      {
+        "page": 102,
+        "reason": "dup"
+      },
+      {
+        "page": 103,
+        "reason": "dup"
+      },
+      {
+        "page": 104,
+        "reason": "dup"
+      },
+      {
+        "page": 105,
+        "reason": "dup"
+      },
+      {
+        "page": 107,
+        "reason": "dup"
+      },
+      {
+        "page": 108,
+        "reason": "dup"
+      },
+      {
+        "page": 109,
+        "reason": "dup"
+      },
+      {
+        "page": 110,
+        "reason": "dup"
+      },
+      {
+        "page": 111,
+        "reason": "dup"
+      },
+      {
+        "page": 113,
+        "reason": "dup"
+      },
+      {
+        "page": 114,
+        "reason": "dup"
+      },
+      {
+        "page": 115,
+        "reason": "dup"
+      },
+      {
+        "page": 116,
+        "reason": "dup"
+      },
+      {
+        "page": 117,
+        "reason": "dup"
+      },
+      {
+        "page": 119,
+        "reason": "dup"
+      },
+      {
+        "page": 120,
+        "reason": "dup"
+      },
+      {
+        "page": 121,
+        "reason": "dup"
+      },
+      {
+        "page": 122,
+        "reason": "dup"
+      },
+      {
+        "page": 123,
+        "reason": "dup"
+      },
+      {
+        "page": 124,
+        "reason": "dup"
+      },
+      {
+        "page": 126,
+        "reason": "dup"
+      },
+      {
+        "page": 127,
+        "reason": "dup"
+      },
+      {
+        "page": 128,
+        "reason": "dup"
+      },
+      {
+        "page": 129,
+        "reason": "dup"
+      },
+      {
+        "page": 131,
+        "reason": "dup"
+      },
+      {
+        "page": 132,
+        "reason": "dup"
+      },
+      {
+        "page": 134,
+        "reason": "dup"
+      },
+      {
+        "page": 135,
+        "reason": "dup"
+      },
+      {
+        "page": 136,
+        "reason": "dup"
+      },
+      {
+        "page": 137,
+        "reason": "dup"
+      },
+      {
+        "page": 138,
+        "reason": "dup"
+      },
+      {
+        "page": 140,
+        "reason": "dup"
+      },
+      {
+        "page": 141,
+        "reason": "dup"
+      },
+      {
+        "page": 142,
+        "reason": "dup"
+      },
+      {
+        "page": 143,
+        "reason": "dup"
+      },
+      {
+        "page": 145,
+        "reason": "dup"
+      },
+      {
+        "page": 146,
+        "reason": "dup"
+      },
+      {
+        "page": 147,
+        "reason": "dup"
+      },
+      {
+        "page": 148,
+        "reason": "dup"
+      },
+      {
+        "page": 150,
+        "reason": "dup"
+      },
+      {
+        "page": 151,
+        "reason": "dup"
+      },
+      {
+        "page": 152,
+        "reason": "dup"
+      },
+      {
+        "page": 153,
+        "reason": "dup"
+      },
+      {
+        "page": 154,
+        "reason": "dup"
+      },
+      {
+        "page": 155,
+        "reason": "dup"
+      },
+      {
+        "page": 156,
+        "reason": "dup"
+      },
+      {
+        "page": 158,
+        "reason": "dup"
+      },
+      {
+        "page": 159,
+        "reason": "dup"
+      },
+      {
+        "page": 160,
+        "reason": "dup"
+      },
+      {
+        "page": 161,
+        "reason": "dup"
+      },
+      {
+        "page": 164,
+        "reason": "dup"
+      },
+      {
+        "page": 165,
+        "reason": "dup"
+      },
+      {
+        "page": 166,
+        "reason": "dup"
+      },
+      {
+        "page": 167,
+        "reason": "dup"
+      },
+      {
+        "page": 169,
+        "reason": "dup"
+      },
+      {
+        "page": 170,
+        "reason": "dup"
+      },
+      {
+        "page": 171,
+        "reason": "dup"
+      },
+      {
+        "page": 172,
+        "reason": "dup"
+      },
+      {
+        "page": 174,
+        "reason": "dup"
+      },
+      {
+        "page": 175,
+        "reason": "dup"
+      },
+      {
+        "page": 176,
+        "reason": "dup"
+      },
+      {
+        "page": 177,
+        "reason": "dup"
+      },
+      {
+        "page": 179,
+        "reason": "dup"
+      },
+      {
+        "page": 180,
+        "reason": "dup"
+      },
+      {
+        "page": 181,
+        "reason": "dup"
+      },
+      {
+        "page": 182,
+        "reason": "dup"
+      },
+      {
+        "page": 184,
+        "reason": "dup"
+      },
+      {
+        "page": 185,
+        "reason": "dup"
+      },
+      {
+        "page": 186,
+        "reason": "dup"
+      },
+      {
+        "page": 187,
+        "reason": "dup"
+      },
+      {
+        "page": 189,
+        "reason": "dup"
+      },
+      {
+        "page": 190,
+        "reason": "dup"
+      },
+      {
+        "page": 191,
+        "reason": "dup"
+      },
+      {
+        "page": 192,
+        "reason": "dup"
+      },
+      {
+        "page": 194,
+        "reason": "dup"
+      },
+      {
+        "page": 195,
+        "reason": "dup"
+      },
+      {
+        "page": 196,
+        "reason": "dup"
+      },
+      {
+        "page": 197,
+        "reason": "dup"
+      },
+      {
+        "page": 199,
+        "reason": "dup"
+      },
+      {
+        "page": 200,
+        "reason": "dup"
+      },
+      {
+        "page": 201,
+        "reason": "dup"
+      },
+      {
+        "page": 202,
+        "reason": "dup"
+      },
+      {
+        "page": 203,
+        "reason": "dup"
+      },
+      {
+        "page": 205,
+        "reason": "dup"
+      },
+      {
+        "page": 206,
+        "reason": "dup"
+      },
+      {
+        "page": 207,
+        "reason": "dup"
+      },
+      {
+        "page": 208,
+        "reason": "dup"
+      },
+      {
+        "page": 209,
+        "reason": "dup"
+      },
+      {
+        "page": 212,
+        "reason": "dup"
+      },
+      {
+        "page": 213,
+        "reason": "dup"
+      },
+      {
+        "page": 214,
+        "reason": "dup"
+      },
+      {
+        "page": 215,
+        "reason": "dup"
+      },
+      {
+        "page": 216,
+        "reason": "dup"
+      },
+      {
+        "page": 217,
+        "reason": "dup"
+      },
+      {
+        "page": 218,
+        "reason": "dup"
+      },
+      {
+        "page": 219,
+        "reason": "dup"
+      },
+      {
+        "page": 220,
+        "reason": "dup"
+      },
+      {
+        "page": 221,
+        "reason": "dup"
+      },
+      {
+        "page": 222,
+        "reason": "dup"
+      },
+      {
+        "page": 223,
+        "reason": "dup"
+      },
+      {
+        "page": 224,
+        "reason": "dup"
+      },
+      {
+        "page": 226,
+        "reason": "dup"
+      },
+      {
+        "page": 227,
+        "reason": "dup"
+      },
+      {
+        "page": 228,
+        "reason": "dup"
+      },
+      {
+        "page": 229,
+        "reason": "dup"
+      },
+      {
+        "page": 230,
+        "reason": "dup"
+      },
+      {
+        "page": 231,
+        "reason": "dup"
+      },
+      {
+        "page": 232,
+        "reason": "dup"
+      },
+      {
+        "page": 233,
+        "reason": "dup"
+      },
+      {
+        "page": 234,
+        "reason": "dup"
+      },
+      {
+        "page": 236,
+        "reason": "dup"
+      },
+      {
+        "page": 237,
+        "reason": "dup"
+      },
+      {
+        "page": 238,
+        "reason": "dup"
+      },
+      {
+        "page": 239,
+        "reason": "dup"
+      },
+      {
+        "page": 240,
+        "reason": "dup"
+      },
+      {
+        "page": 241,
+        "reason": "dup"
+      },
+      {
+        "page": 242,
+        "reason": "dup"
+      },
+      {
+        "page": 243,
+        "reason": "dup"
+      },
+      {
+        "page": 244,
+        "reason": "dup"
+      },
+      {
+        "page": 246,
+        "reason": "dup"
+      },
+      {
+        "page": 247,
+        "reason": "dup"
+      },
+      {
+        "page": 248,
+        "reason": "dup"
+      },
+      {
+        "page": 249,
+        "reason": "dup"
+      },
+      {
+        "page": 250,
+        "reason": "dup"
+      },
+      {
+        "page": 251,
+        "reason": "dup"
+      },
+      {
+        "page": 252,
+        "reason": "dup"
+      },
+      {
+        "page": 253,
+        "reason": "dup"
+      },
+      {
+        "page": 254,
+        "reason": "dup"
+      },
+      {
+        "page": 256,
+        "reason": "dup"
+      },
+      {
+        "page": 257,
+        "reason": "dup"
+      },
+      {
+        "page": 258,
+        "reason": "dup"
+      },
+      {
+        "page": 259,
+        "reason": "dup"
+      },
+      {
+        "page": 260,
+        "reason": "dup"
+      },
+      {
+        "page": 261,
+        "reason": "dup"
+      },
+      {
+        "page": 263,
+        "reason": "dup"
+      },
+      {
+        "page": 264,
+        "reason": "dup"
+      },
+      {
+        "page": 265,
+        "reason": "dup"
+      },
+      {
+        "page": 266,
+        "reason": "dup"
+      },
+      {
+        "page": 267,
+        "reason": "dup"
+      },
+      {
+        "page": 268,
+        "reason": "dup"
+      },
+      {
+        "page": 269,
+        "reason": "dup"
+      },
+      {
+        "page": 270,
+        "reason": "dup"
+      },
+      {
+        "page": 271,
+        "reason": "dup"
+      },
+      {
+        "page": 272,
+        "reason": "dup"
+      },
+      {
+        "page": 274,
+        "reason": "dup"
+      },
+      {
+        "page": 275,
+        "reason": "dup"
+      },
+      {
+        "page": 276,
+        "reason": "dup"
+      },
+      {
+        "page": 277,
+        "reason": "dup"
+      },
+      {
+        "page": 278,
+        "reason": "dup"
+      },
+      {
+        "page": 279,
+        "reason": "dup"
+      },
+      {
+        "page": 281,
+        "reason": "dup"
+      },
+      {
+        "page": 282,
+        "reason": "dup"
+      },
+      {
+        "page": 283,
+        "reason": "dup"
+      }
+    ],
+    "dropped_ranges": [
+      {
+        "from": 2,
+        "to": 6,
+        "reason": "dup"
+      },
+      {
+        "from": 8,
+        "to": 12,
+        "reason": "dup"
+      },
+      {
+        "from": 14,
+        "to": 15,
+        "reason": "dup"
+      },
+      {
+        "from": 17,
+        "to": 20,
+        "reason": "dup"
+      },
+      {
+        "from": 22,
+        "to": 25,
+        "reason": "dup"
+      },
+      {
+        "from": 27,
+        "to": 30,
+        "reason": "dup"
+      },
+      {
+        "from": 32,
+        "to": 32,
+        "reason": "dup"
+      },
+      {
+        "from": 34,
+        "to": 41,
+        "reason": "dup"
+      },
+      {
+        "from": 43,
+        "to": 48,
+        "reason": "dup"
+      },
+      {
+        "from": 50,
+        "to": 51,
+        "reason": "dup"
+      },
+      {
+        "from": 53,
+        "to": 55,
+        "reason": "dup"
+      },
+      {
+        "from": 57,
+        "to": 63,
+        "reason": "dup"
+      },
+      {
+        "from": 65,
+        "to": 69,
+        "reason": "dup"
+      },
+      {
+        "from": 71,
+        "to": 72,
+        "reason": "dup"
+      },
+      {
+        "from": 74,
+        "to": 75,
+        "reason": "dup"
+      },
+      {
+        "from": 77,
+        "to": 79,
+        "reason": "dup"
+      },
+      {
+        "from": 81,
+        "to": 83,
+        "reason": "dup"
+      },
+      {
+        "from": 85,
+        "to": 88,
+        "reason": "dup"
+      },
+      {
+        "from": 90,
+        "to": 93,
+        "reason": "dup"
+      },
+      {
+        "from": 95,
+        "to": 99,
+        "reason": "dup"
+      },
+      {
+        "from": 101,
+        "to": 105,
+        "reason": "dup"
+      },
+      {
+        "from": 107,
+        "to": 111,
+        "reason": "dup"
+      },
+      {
+        "from": 113,
+        "to": 117,
+        "reason": "dup"
+      },
+      {
+        "from": 119,
+        "to": 124,
+        "reason": "dup"
+      },
+      {
+        "from": 126,
+        "to": 129,
+        "reason": "dup"
+      },
+      {
+        "from": 131,
+        "to": 132,
+        "reason": "dup"
+      },
+      {
+        "from": 134,
+        "to": 138,
+        "reason": "dup"
+      },
+      {
+        "from": 140,
+        "to": 143,
+        "reason": "dup"
+      },
+      {
+        "from": 145,
+        "to": 148,
+        "reason": "dup"
+      },
+      {
+        "from": 150,
+        "to": 156,
+        "reason": "dup"
+      },
+      {
+        "from": 158,
+        "to": 161,
+        "reason": "dup"
+      },
+      {
+        "from": 164,
+        "to": 167,
+        "reason": "dup"
+      },
+      {
+        "from": 169,
+        "to": 172,
+        "reason": "dup"
+      },
+      {
+        "from": 174,
+        "to": 177,
+        "reason": "dup"
+      },
+      {
+        "from": 179,
+        "to": 182,
+        "reason": "dup"
+      },
+      {
+        "from": 184,
+        "to": 187,
+        "reason": "dup"
+      },
+      {
+        "from": 189,
+        "to": 192,
+        "reason": "dup"
+      },
+      {
+        "from": 194,
+        "to": 197,
+        "reason": "dup"
+      },
+      {
+        "from": 199,
+        "to": 203,
+        "reason": "dup"
+      },
+      {
+        "from": 205,
+        "to": 209,
+        "reason": "dup"
+      },
+      {
+        "from": 212,
+        "to": 224,
+        "reason": "dup"
+      },
+      {
+        "from": 226,
+        "to": 234,
+        "reason": "dup"
+      },
+      {
+        "from": 236,
+        "to": 244,
+        "reason": "dup"
+      },
+      {
+        "from": 246,
+        "to": 254,
+        "reason": "dup"
+      },
+      {
+        "from": 256,
+        "to": 261,
+        "reason": "dup"
+      },
+      {
+        "from": 263,
+        "to": 272,
+        "reason": "dup"
+      },
+      {
+        "from": 274,
+        "to": 279,
+        "reason": "dup"
+      },
+      {
+        "from": 281,
+        "to": 283,
+        "reason": "dup"
+      }
+    ]
+  },
+  "pdf_full": "./fixture/sample-full.pdf",
+  "pdf_simplified": "./fixture/sample-simplified.pdf"
+}
