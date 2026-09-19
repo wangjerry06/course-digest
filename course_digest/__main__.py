@@ -5,6 +5,7 @@ import sys
 
 from . import extract
 from . import import_pdf
+from . import simplify
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +35,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="额外把完整 JSON 写到该路径（调试用）",
     )
     p_extract.set_defaults(func=extract.run)
+
+    p_simplify = sub.add_parser(
+        "simplify",
+        help="读 extract.json 生成 simplified.pdf + page-map.json（不改原 PDF）",
+    )
+    p_simplify.add_argument("doc_id", help="import 产出的 docId")
+    p_simplify.add_argument(
+        "--drop",
+        metavar="SPEC",
+        help='额外删除的页码（agent 判定的无关页），如 "3,7,9-11"',
+    )
+    p_simplify.set_defaults(func=simplify.run)
 
     return parser
 
