@@ -2,7 +2,7 @@
 
 ## [0.1.3] — 未发布
 
-**两项改动：一项纯文档（写总结的风格偏好升硬约定）+ 一项前端交互新增（联动改双向）。无 breaking change** —— 命令、产物格式、`~/.course-digest/` 既有内容都不变。
+**三项改动：一项纯文档（写总结的风格偏好升硬约定）+ 一项前端交互新增（联动改双向）+ 一项新 API 端点（编辑器保存的后端链路）。无 breaking change** —— 命令、产物格式、`~/.course-digest/` 既有内容都不变。
 
 ### 变更：写总结的风格偏好升为硬约定
 
@@ -47,6 +47,38 @@ v0.1.2 之前联动是**单向**的：点总结里的段落 → 跳到 PDF 对�
 已知取舍：命中层要盖在 canvas 之上才拿得到 `cursor: pointer` 与 hover 反馈，
 因此 PDF 原文的**文字拖选会被它挡住**（ADR-005 的文本层仍在，只是指针够不到）。
 要保留选字，就得把点击监听挪到页容器上、并接受文字上光标变 I 形 —— 两者不能兼得。
+
+### 新增：`POST /api/doc/<id>/summary` —— 编辑器保存的后端链路
+
+页面上的 MD 编辑器要把改过的总结存回去，服务端提供这条写接口：
+
+```
+POST /api/doc/<id>/summary    body: {"summary_md": "..."}
+      ↓ strip_footer → validate_summary → anchor_coverage → 落盘 summary.md
+200 → {ok: true,  coverage, anchored, total, unanchored, summary_md}
+400 → {ok: false, errors, coverage, anchored, total, unanchored}
+```
+
+- **与命令行 publish 同一套口径**：复用抽出来的纯函数 `_write_summary_md`，落盘字节
+  就是 `strip_footer(正文) + build_footer(docId)`。于是「在页面上保存」和「用命令发布」
+  不会产出两种不同的 `summary.md`，也不会把回程票叠成两张
+- **回程票由服务端管**：前端送上来带票、不带票都行 —— 服务端自己剥、自己补一张；
+  响应里的 `summary_md` 是**可直接回填前端**的最终形态，前端不必也不该自己拼 footer
+- **锚点不合规 → 400 阻止**（格式非法 / 页号越界）；**覆盖率不满 100% → 200 不阻止**，
+  只把 `coverage` 和未锚段落（行号 + 预览）报回来 —— 编辑器是草稿场景，半成品必须存得下
+- **只改 `summary.md`**：`simplified.pdf` / `page-map.json` / `extract.json` / `meta.json`
+  一个字节都不动（测试里逐个 sha256 见证）
+- **路径防御与读接口同一道闸**：docId 白名单不合法 → 400；resolve 后越出 `docs/` → 403
+- **不改既有 HTTP 契约**：读接口仍然只有 GET，只读资源上的 POST 仍然 405；
+  `GET /api/doc/<id>` 的返回字段名一个没动；不开 CORS（ADR-002）
+
+顺带把 `publish.py` 里「正文 + 回程票」的落盘口径抽成纯函数，两条路径共用一份写法。
+抽完用**4 份真实文档**在旧 / 新代码上各跑一次 publish：`summary.md` / `meta.json` /
+`page-map.json` / `simplified.pdf` 的 sha256 与 stdout **全部相同** —— 是逐字节等价，
+不是「看起来一样」。
+
+测试：`tests/http_test.py` 由 **56 条增至 107 条**（正常 / 边界 / 反向三类都覆盖，
+含「带票不叠票」「同路径重发幂等」「400 不落盘」「只动 summary.md」等）。
 
 ## [0.1.2] — 2026-09-23
 
