@@ -648,6 +648,40 @@ check('attachPageHit: 原始页号映射缺失 → 点/键盘都不跳、不抛'
 check('attachPageHit: 映射缺失时 aria-label 退回页序号（页面仍可访问）',
   orphanEl.attrs['aria-label'] === '点击跳到第 2 页对应总结');
 
+/* —— setMdStatus 的行为：借用 #pdf-status，1.5 秒后自清，但不许误清别人的状态 —— */
+
+let timerFn = null;
+let timerMs = 0;
+const statusEl = { textContent: '', hidden: true };
+const $status = (sel) => (sel === '#pdf-status' ? statusEl : null);
+const timerDeps = {
+  $: $status,
+  setTimeout: (fn, ms) => { timerFn = fn; timerMs = ms; return 1; },
+  clearTimeout: () => { timerFn = null; },
+};
+
+const setMdStatus = load('setMdStatus', { ...timerDeps, statusRetry: null });
+const setMdStatusBusy = load('setMdStatus', { ...timerDeps, statusRetry: () => {} });
+
+setMdStatus('已跳到第 5 页对应总结');
+check('setMdStatus: 写出文案并显示出来',
+  statusEl.textContent === '已跳到第 5 页对应总结' && statusEl.hidden === false);
+check('setMdStatus: 定时 1.5 秒后消失', timerMs === 1500 && typeof timerFn === 'function');
+timerFn();
+check('setMdStatus: 到点后清空并隐藏', statusEl.textContent === '' && statusEl.hidden === true);
+
+setMdStatus('已跳到第 7 页对应总结');
+statusEl.textContent = 'PDF 加载失败：xxx';     // 这 1.5 秒里真正的 PDF 状态顶了上来
+timerFn();
+check('setMdStatus: 期间被 PDF 状态顶掉过 → 不误清别人的文案',
+  statusEl.textContent === 'PDF 加载失败：xxx');
+
+statusEl.textContent = 'PDF 加载失败：xxx';
+statusEl.hidden = false;
+setMdStatusBusy('已跳到第 1 页对应总结');
+check('setMdStatus: PDF 报错带重试时不抢占状态条',
+  statusEl.textContent === 'PDF 加载失败：xxx');
+
 /* —— 回归：MD → PDF 的单向跳转不能被碰坏 —— */
 
 const onMdClickSrc = extract('onMdClick');

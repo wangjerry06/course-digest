@@ -600,6 +600,8 @@ function setMdStatus(text) {
   el.hidden = false;
   clearTimeout(setMdStatus._t);
   setMdStatus._t = setTimeout(() => {
+    // 这 1.5 秒里被更重要的 PDF 状态顶掉过？那内容已经不是我们的了，别去清它
+    if (el.textContent !== text) return;
     el.textContent = '';
     el.hidden = true;
   }, 1500);
