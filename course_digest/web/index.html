@@ -41,6 +41,10 @@
     <div id="pdf-status" class="status" hidden></div>
   </section>
 
+  <!-- 分栏拖拽手柄（ADR-017：不设限位，纯流式拖；≤900px 时隐藏，走 v0.1.0 的上下堆叠） -->
+  <div class="split-handle" id="split-handle" role="separator"
+       aria-label="拖动调整左右分栏"></div>
+
   <!-- 右：Markdown 总结 -->
   <aside id="md-pane" aria-label="总结">
     <div id="md-scroll">

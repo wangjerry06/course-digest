@@ -68,7 +68,9 @@ button:active { background: #e6e6e9; }
 
 #layout {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  /* 中间 6px 是拖拽手柄的轨道；左栏宽度由 --split-left 控制（JS 拖拽时改它，
+     默认 2fr 保持 v0.1.0 的视觉）。百分比在 grid-template-columns 里同样合法。 */
+  grid-template-columns: var(--split-left, 2fr) 6px 1fr;
   height: calc(100vh - 48px);
   min-height: 0;              /* 让子项能真正滚动 */
 }
@@ -80,7 +82,29 @@ button:active { background: #e6e6e9; }
   overflow: hidden;
 }
 
-#pdf-pane { border-right: 1px solid #d8d8dc; background: #3a3a3c; }
+/* 左右分栏的分界线交给手柄来画，pane 自己不再画右边框（否则一条线会变两条） */
+#pdf-pane { background: #3a3a3c; }
+
+/* ---------- 分栏拖拽手柄（F8，ADR-017） ---------- */
+
+.split-handle {
+  position: relative;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;         /* 触摸下交给 pointer 事件，别让浏览器抢去做滚动 */
+}
+
+.split-handle::after {
+  content: "";
+  position: absolute;
+  inset: 0 2px;               /* 6px 轨道里画 2px 的细条，两侧留白 */
+  background: #d0d0d0;
+  border-radius: 2px;
+  transition: background .15s;
+}
+
+.split-handle:hover::after,
+.split-handle.dragging::after { background: var(--accent); }
 
 #pdf-scroll, #md-scroll {
   height: 100%;
@@ -88,9 +112,11 @@ button:active { background: #e6e6e9; }
   -webkit-overflow-scrolling: touch;
 }
 
+/* ≤900px：手柄隐藏，保持 v0.1.0 的上下堆叠（PDF 端响应式布局推 v0.2） */
 @media (max-width: 900px) {
   #layout { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; height: calc(100vh - 48px); }
-  #pdf-pane { border-right: none; border-bottom: 1px solid #d8d8dc; }
+  .split-handle { display: none; }
+  #pdf-pane { border-bottom: 1px solid #d8d8dc; }
 }
 
 /* ---------- 左：PDF 页 ---------- */

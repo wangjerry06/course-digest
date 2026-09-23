@@ -652,6 +652,103 @@ function downloadPdf() {
 }
 
 /* ------------------------------------------------------------------ *
+ * 分栏拖拽（F8，ADR-017：**不设限位**，纯流式拖）
+ * ------------------------------------------------------------------ */
+
+/* 手柄轨道宽度，与 style.css 的 grid-template-columns 中间那一列保持一致 */
+const SPLIT_HANDLE_PX = 6;
+
+/* 鼠标 x → 左栏占比字符串。纯函数（node 里可测）。
+   不设最小宽度（ADR-017：用户控制权 > 防误操作），只把值夹进 0%~100% ——
+   越界的百分比会算出负的列宽或溢出容器。 */
+function splitPercent(clientX, layoutLeft, layoutWidth, handlePx) {
+  const usable = layoutWidth - handlePx;
+  if (usable <= 0) return '100%';
+  const left = clientX - layoutLeft - handlePx / 2;
+  const pct = (left / usable) * 100;
+  return `${Math.min(100, Math.max(0, pct)).toFixed(2)}%`;
+}
+
+/* 持久化键：per-docId（v0.1.1 不做全局开关） */
+function splitKey(docId) {
+  return `course-digest:${docId}:split`;
+}
+
+function applySplit(value) {
+  document.documentElement.style.setProperty('--split-left', value);
+}
+
+function currentSplit() {
+  return getComputedStyle(document.documentElement)
+    .getPropertyValue('--split-left').trim();
+}
+
+function initSplitDrag() {
+  const handle = $('#split-handle');
+  const layout = $('#layout');
+  if (!handle || !layout) return;
+
+  const key = splitKey(state.data.meta.id || '');
+  const stored = localStorage.getItem(key);
+  if (stored) applySplit(stored);      // 刷新后保持比例
+
+  let dragging = false;
+  let raf = 0;
+  let lastX = null;
+
+  /* 写 CSS 变量本身很便宜，但 pointermove 频率可达几百 Hz —— 节流到帧 */
+  const flush = () => {
+    raf = 0;
+    if (lastX == null) return;
+    const rect = layout.getBoundingClientRect();
+    applySplit(splitPercent(lastX, rect.left, rect.width, SPLIT_HANDLE_PX));
+  };
+
+  const onMove = (ev) => {
+    if (!dragging) return;
+    lastX = ev.clientX;
+    if (!raf) raf = requestAnimationFrame(flush);
+  };
+
+  const endDrag = (ev) => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    if (raf) cancelAnimationFrame(raf);
+    flush();
+    if (ev && handle.hasPointerCapture && handle.hasPointerCapture(ev.pointerId)) {
+      handle.releasePointerCapture(ev.pointerId);
+    }
+    const value = currentSplit();
+    if (value) localStorage.setItem(key, value);
+
+    /* 分栏宽度变了，PDF 的「适配容器宽度」比例也得跟着重算 —— 否则会留着旧宽度：
+       变窄时出横向滚动条，变宽时两侧一大片留白。与窗口 resize 走同一条路。 */
+    if (state.pdf) {
+      const visible = currentVisiblePage();
+      layoutPages();
+      observePages();
+      scrollToPage(visible);
+    }
+    lastX = null;
+  };
+
+  handle.addEventListener('pointerdown', (ev) => {
+    dragging = true;
+    handle.classList.add('dragging');
+    try {
+      handle.setPointerCapture(ev.pointerId);
+    } catch (err) {
+      /* 个别浏览器不支持 pointer capture：退化成普通 pointermove，仍可用 */
+    }
+    ev.preventDefault();       // 别让拖拽变成选中文本
+  });
+  handle.addEventListener('pointermove', onMove);
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+}
+
+/* ------------------------------------------------------------------ *
  * 启动
  * ------------------------------------------------------------------ */
 
@@ -708,6 +805,7 @@ async function main() {
     renderMarkdown();
     buildBanners();
     wireInteractions();
+    initSplitDrag();               // 先把存下来的分栏比例应用上，再布局 PDF（避免闪一下）
     await switchVersion('simplified', { initial: true });
     console.info('course-digest: 已就绪', {
       mode: new URLSearchParams(location.search).has('mock') ? 'mock' : 'api',

@@ -228,6 +228,94 @@ check('marked: 代码块前的锚点 → 落在 <pre>', eq(hosts[2], ['7', '<pre
 check('style.css: ▸ 通用选择器能覆盖表格（不写死 p）',
   !/#md p\[data-pages\]/.test(CSS) && /#md \[data-pages\]/.test(CSS));
 
+/* ------------------------------------------------------------------ *
+ * 分栏拖拽（F8，ADR-017：不设限位）
+ * ------------------------------------------------------------------ */
+
+const splitPercent = load('splitPercent');
+const splitKey = load('splitKey');
+
+check('splitKey: 形如 course-digest:<docId>:split（per-docId）',
+  splitKey('2026-09-23-demo') === 'course-digest:2026-09-23-demo:split');
+check('splitKey: 不同 docId 互不干扰',
+  splitKey('a') !== splitKey('b') && splitKey('') === 'course-digest::split');
+
+// 1000px 布局 + 6px 手柄 → 可用宽度 994px
+check('splitPercent: 正中间 = 50%',
+  splitPercent(500, 0, 1000, 6) === '50.00%');
+check('splitPercent: 布局有左边距（窗口内嵌）时要减去布局原点',
+  splitPercent(600, 100, 1000, 6) === '50.00%');
+check('splitPercent: 手柄贴最左（clientX = 手柄半宽）→ 0%',
+  splitPercent(3, 0, 1000, 6) === '0.00%');
+check('splitPercent: 手柄贴最右 → 100%',
+  splitPercent(997, 0, 1000, 6) === '100.00%');
+// 2006 - 6 = 2000 可用；手柄中心 500 → 正好 1/4
+check('splitPercent: 左侧 1/4',
+  splitPercent(503, 0, 2006, 6) === '25.00%');
+check('splitPercent: 拖到最左 → 夹到 0%（ADR-017 允许，但值不能为负）',
+  splitPercent(0, 0, 1000, 6) === '0.00%');
+check('splitPercent: 拖到最右 → 夹到 100%（不能溢出容器）',
+  splitPercent(1000, 0, 1000, 6) === '100.00%');
+check('splitPercent: 远超右边界照样夹到 100%',
+  splitPercent(5000, 0, 1000, 6) === '100.00%');
+check('splitPercent: 布局宽度为 0 时不除零',
+  splitPercent(10, 0, 0, 6) === '100%');
+check('splitPercent: 宽度等于手柄宽度时也不除零',
+  splitPercent(10, 0, 6, 6) === '100%');
+check('splitPercent: 结果是带两位小数的百分比字符串',
+  /^\d+\.\d{2}%$/.test(splitPercent(333, 0, 1000, 6)));
+
+/* CSS / HTML 静态检查：手柄真的存在、真的接在 grid 上、移动端真的隐藏 */
+const HTML = fs.readFileSync(
+  path.join(__dirname, '..', 'course_digest', 'web', 'index.html'), 'utf8');
+
+check('index.html: 有分栏手柄且带无障碍标注',
+  /id="split-handle"/.test(HTML) && /role="separator"/.test(HTML)
+  && /aria-label="拖动调整左右分栏"/.test(HTML));
+check('index.html: 手柄夹在 PDF 与 MD 两栏之间',
+  HTML.indexOf('id="pdf-pane"') < HTML.indexOf('id="split-handle"')
+  && HTML.indexOf('id="split-handle"') < HTML.indexOf('id="md-pane"'));
+check('style.css: #layout 用 --split-left 控制左栏宽度',
+  /grid-template-columns:\s*var\(--split-left,\s*2fr\)/.test(CSS));
+check('style.css: 中间留了 6px 手柄轨道',
+  /grid-template-columns:\s*var\(--split-left,[^;]*\)\s*6px\s+1fr/.test(CSS));
+check('style.css: 手柄为 col-resize 光标',
+  /\.split-handle\s*\{[^}]*cursor:\s*col-resize/.test(CSS));
+check('style.css: 拖动中/悬停时手柄变色（用 --accent）',
+  /\.split-handle\.dragging::after[\s\S]{0,80}var\(--accent\)/.test(CSS));
+check('style.css: 手柄 touch-action: none（触摸下不被滚动抢走）',
+  /\.split-handle\s*\{[^}]*touch-action:\s*none/.test(CSS));
+check('style.css: ≤900px 隐藏手柄（保持 v0.1.0 的上下堆叠）',
+  /@media \(max-width:\s*900px\)[\s\S]*?\.split-handle\s*\{\s*display:\s*none/.test(CSS));
+
+/* 持久化的接线（真实读写要在浏览器里才跑得到，这里把「有没有接上」钉住） */
+check('app.js: 启动时按 docId 读回已存比例并应用',
+  /localStorage\.getItem\(key\)/.test(SRC) && /if \(stored\) applySplit\(stored\)/.test(SRC));
+check('app.js: 拖动结束写回 localStorage',
+  /localStorage\.setItem\(key,\s*value\)/.test(SRC));
+check('app.js: 用 pointer 事件（触摸设备同一套）',
+  /addEventListener\('pointerdown'/.test(SRC)
+  && /addEventListener\('pointermove'/.test(SRC)
+  && /addEventListener\('pointerup'/.test(SRC));
+check('app.js: pointermove 节流到 rAF（不是每个事件都写 DOM）',
+  /requestAnimationFrame\(flush\)/.test(SRC));
+check('app.js: 拖动结束会重算 PDF 布局（否则留着旧宽度）',
+  /const visible = currentVisiblePage\(\);\s*\n\s*layoutPages\(\);\s*\n\s*observePages\(\);\s*\n\s*scrollToPage\(visible\);/
+    .test(SRC));
+/* 「函数写了但没调用」是纯静态检查唯一抓得到的失效形态，而它恰恰最常见 */
+check('app.js: main() 里真的调用了 initSplitDrag()',
+  /^\s*initSplitDrag\(\);/m.test(SRC));
+check('app.js: main() 里真的调用了 annotateAnchors()',
+  /annotateAnchors\(article\);/.test(SRC));
+
+/* 手柄轨道宽度必须与 JS 里的常量一致，否则 splitPercent 会算偏 */
+const trackPx = Number(
+  (CSS.match(/grid-template-columns:\s*var\(--split-left,[^;]*?\)\s*(\d+)px\s+1fr/) || [])[1]);
+const jsHandlePx = Number(
+  (SRC.match(/const SPLIT_HANDLE_PX\s*=\s*(\d+)/) || [])[1]);
+check(`几何: CSS 手柄轨道(${trackPx}px) 与 JS 常量(${jsHandlePx}px) 一致`,
+  trackPx > 0 && trackPx === jsHandlePx);
+
 /* index.html 的按钮接线在 http_test.py 里查（那边本来就在做静态资产检查） */
 
 if (failed) {
