@@ -39,6 +39,10 @@ _FOOTER_ANCHOR_RE = re.compile(r"<!--\s*course-digest:\s*docId=([^\s\n]+)[^>]*--
 # 覆盖率低于这个值就额外告警
 _COVERAGE_WARN = 50.0
 
+# 未锚定段落的预览长度，以及 stderr 里最多列几条
+_PREVIEW_LEN = 30
+_UNANCHORED_MAX = 10
+
 # 标题截断长度（§三：取首个非空页的第一行）
 _TITLE_MAX = 80
 
@@ -166,17 +170,40 @@ def _has_content(segment: str) -> bool:
     return False
 
 
-def anchor_coverage(text: str) -> tuple[int, int]:
-    """返回 (带锚点段落, 总段落)。
+def _split_blocks(text: str):
+    """按空行切块，产出 (块文本, 块在 text 里的起始偏移)。
+
+    与 `_BLANK_RE.split(text)` 的切法完全一致，只是多带一个偏移量 ——
+    算未锚定段落的**起始行号**要用它。
+    """
+    pos = 0
+    for m in _BLANK_RE.finditer(text):
+        yield text[pos:m.start()], pos
+        pos = m.end()
+    yield text[pos:], pos
+
+
+def _preview(block: str, limit: int = _PREVIEW_LEN) -> str:
+    """单行预览：折叠空白、截断，超长时加省略号（让人知道后面还有）。"""
+    one = re.sub(r"\s+", " ", block).strip()
+    return one[:limit] + ("…" if len(one) > limit else "")
+
+
+def anchor_coverage(text: str) -> tuple[int, int, list[dict]]:
+    """返回 (带锚点段落, 总段落, 未锚定段落列表)。
 
     段落 = 空行分隔的正文块，不含标题、分隔线与锚点注释本身。
     「带锚点」= 该块紧跟在锚点注释之后 —— 前端只给带 data-pages 的元素绑跳转，
     所以只有这样的段落是真的可点的。
+
+    unanchored 每项 `{"line": 起始行号(1 起), "preview": 前 30 字符}`：
+    publish 靠它告诉 agent「改哪里」，而不是只扔一个百分比出来让人盲改。
     """
     total = anchored = 0
     prev_is_anchor = False
+    unanchored: list[dict] = []
 
-    for block in _BLANK_RE.split(text):
+    for block, start in _split_blocks(text):
         s = block.strip()
         if not s:
             continue
@@ -194,9 +221,14 @@ def anchor_coverage(text: str) -> tuple[int, int]:
         total += 1
         if prev_is_anchor:
             anchored += 1
+        else:
+            unanchored.append({
+                "line": text.count("\n", 0, start) + 1,
+                "preview": _preview(s),
+            })
         prev_is_anchor = False
 
-    return anchored, total
+    return anchored, total, unanchored
 
 
 # ----------------------------------------------------------------------
@@ -326,10 +358,20 @@ def run(args) -> int:
                     file=sys.stderr,
                 )
 
-    # 4) 锚点覆盖率
-    anchored, total = anchor_coverage(body)
+    # 4) 锚点覆盖率：不满 100% 就把「哪里没锚点」列出来，agent 才能一轮修完
+    anchored, total, unanchored = anchor_coverage(body)
     pct = (100.0 * anchored / total) if total else 0.0
     print(f"锚点覆盖率：带锚点段落 {anchored} / 总段落 {total} = {pct:.0f}%", file=sys.stderr)
+    if pct < 100 and unanchored:
+        print(
+            f"warning: 以下 {len(unanchored)} 段没有锚点（行号指向 summary.md 原文，"
+            f"预览截到 {_PREVIEW_LEN} 字符），逐个补 <!-- pages: N --> 后重发即可：",
+            file=sys.stderr,
+        )
+        for item in unanchored[:_UNANCHORED_MAX]:
+            print(f"  L{item['line']}: {item['preview']}", file=sys.stderr)
+        if len(unanchored) > _UNANCHORED_MAX:
+            print(f"  …等 {len(unanchored)} 段", file=sys.stderr)
     if pct < _COVERAGE_WARN:
         print(
             f"warning: 锚点覆盖率 < {_COVERAGE_WARN:.0f}% —— 联动的可用性直接取决于锚点密度，"

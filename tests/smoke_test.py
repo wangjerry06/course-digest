@@ -631,6 +631,38 @@ def main():
     check("footer 幂等: 不叠加（注释只出现一次）", _once.count("course-digest: docId=") == 1)
     check("footer 幂等: 正文没被改动", publish.strip_footer(_once) == _BODY)
 
+    # --- coverage：三元组 + 未锚定段落的行号与预览（§3）---
+    _long = "这是一段很长的没有锚点的正文内容" * 3
+    _cov = (
+        "<!-- pages: 1 -->\n\n"
+        "有锚点的第一段\n\n"
+        f"{_long}\n\n"
+        "也没有锚点的一段\n\n"
+        "<!-- pages: 3 -->\n\n"
+        "有锚点的第三段\n"
+    )
+    _a, _t, _un = publish.anchor_coverage(_cov)
+    check("coverage: 返回三元组 (anchored, total, unanchored)", (_a, _t) == (2, 4))
+    check("coverage: 未锚定段落数正确", len(_un) == 2)
+    check("coverage: 未锚定段落起始行号正确", [_x["line"] for _x in _un] == [5, 7])
+    check("coverage: 预览截到 30 字符 + 省略号",
+          _un[0]["preview"] == _long[:30] + "…")
+    check("coverage: 短段落预览不加省略号", _un[1]["preview"] == "也没有锚点的一段")
+    check("coverage: 100% 时未锚定为空",
+          publish.anchor_coverage("<!-- pages: 1 -->\n\n只有一段\n") == (1, 1, []))
+    check("coverage: 标题/分隔线不算段落也不进未锚定列表",
+          publish.anchor_coverage("# 标题\n\n---\n\n正文没锚点\n") == (0, 1, [
+              {"line": 5, "preview": "正文没锚点"},
+          ]))
+    check("coverage: 空文本 → (0, 0, [])", publish.anchor_coverage("") == (0, 0, []))
+    check("coverage: 注释与正文同块算带锚点",
+          publish.anchor_coverage("<!-- pages: 1 -->\n正文\n") == (1, 1, []))
+    # 锚点被标题断开：标题后的段落不算带锚点
+    check("coverage: 锚点与正文之间的标题会断开锚点",
+          publish.anchor_coverage("<!-- pages: 1 -->\n\n## 小节\n\n正文\n") == (0, 1, [
+              {"line": 5, "preview": "正文"},
+          ]))
+
     # --- publish 落盘口径（端到端，假 serve）---
     with tempfile.TemporaryDirectory() as td:
         _tmp = Path(td)
@@ -657,7 +689,7 @@ def main():
             # 覆盖率不被 footer 拉低（footer 在剥离后的文本上算）
             check("publish: footer 不计入覆盖率",
                   publish.anchor_coverage(publish.strip_footer(_dest.read_text(encoding="utf-8")))
-                  == (2, 2))
+                  == (2, 2, []))
 
             # 幂等：同一份输入连发两次，落盘字节不变
             _first = _dest.read_bytes()
@@ -759,6 +791,40 @@ def main():
                 check(f"--help 可用：{_cmd}", _helped)
             _open_ns = cli.build_parser().parse_args(["open", "some-doc"])
             check("open: 位置参数名改为 target", hasattr(_open_ns, "target"))
+
+            # --- 覆盖率 <100%：stderr 列出未锚定段落（行号 + 预览，上限 10）---
+            make_publishable_doc(paths.DOCS_DIR, "cov1", 3)
+            _cov_md = (
+                "<!-- pages: 1 -->\n\n第一段有锚点\n\n"
+                "第二段没有锚点\n\n"
+                "<!-- pages: 3 -->\n\n第三段有锚点\n"
+            )
+            rc, out, err, _ = publish_md("cov1", _cov_md, _tmp)
+            check("coverage: 不满 100% 仍 rc == 0（只是 warning）", rc == 0)
+            check("coverage: stdout 契约不动（仍只有 URL）",
+                  out == "http://127.0.0.1:12345/doc/cov1\n")
+            check("coverage: stderr 报出 2/3", "带锚点段落 2 / 总段落 3" in err)
+            check("coverage: stderr 列出未锚定段落行号", "  L5:" in err)
+            check("coverage: stderr 附该段预览", "第二段没有锚点" in err)
+            check("coverage: 67% 不触发 <50% 的额外 warning",
+                  "锚点覆盖率 < 50%" not in err)
+
+            # 覆盖率 <50%：原 warning 保留
+            rc, out, err, _ = publish_md(
+                "cov1", "没锚点的一段\n\n也没锚点的另一段\n\n<!-- pages: 1 -->\n\n有锚点\n", _tmp
+            )
+            check("coverage: <50% 时原 warning 保留", "锚点覆盖率 < 50%" in err)
+            check("coverage: <50% 时仍列出未锚定段落", "  L1:" in err and "  L3:" in err)
+
+            # 超过 10 条：只列前 10 条 + 「…等 N 段」
+            _many = "\n\n".join(f"第 {i} 段没有锚点" for i in range(1, 14))
+            rc, out, err, _ = publish_md(
+                "cov1", _many + "\n\n<!-- pages: 1 -->\n\n有锚点\n", _tmp
+            )
+            _listed = [l for l in err.splitlines() if l.startswith("  L")]
+            check("coverage: 未锚定段落最多列 10 条", len(_listed) == 10)
+            check("coverage: 超出打「…等 N 段」（N = 全部未锚定数）", "…等 13 段" in err)
+            check("coverage: 13/14 = 7% 也触发 <50% warning", "锚点覆盖率 < 50%" in err)
 
             # 反向：坏锚点必须中止，且产物一字未动
             _dest.write_text(_md + publish.build_footer("pad1"), encoding="utf-8")
