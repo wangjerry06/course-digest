@@ -2,17 +2,20 @@
 
     publish <docId> --summary <md路径> [--drop "3,7-9"]
         校验锚点 → simplify → 落盘 summary.md → 补全 meta.json → ensure_server → 开浏览器
-    open <docId>    已有文档：ensure_server + 打开，**不重新生成任何东西**
+    open <docId|summary.md 路径>    已有文档：ensure_server + 打开，**不重新生成任何东西**
     list            列文档库，**纯文件操作，不起服务**（ADR-011：按需）
 
 meta.json 的**唯一最终写入者**是 publish：import 只写初版，之后由这里补全
 simplified_pages / has_simplified / title；id 与 created 保持 import 时的值不变
 （created 是「创建时间」，不随 publish 刷新）。
+
+summary.md 的**唯一最终写入者**同样是 publish：落盘时在正文尾部追加回程票 footer
+（ADR-015，只写 docId 不写 URL，供 `open <md路径>` 恢复页面）。读入先 strip 再写，
+重复 publish 不叠加；校验与覆盖率统计一律在剥离后的正文上做。
 """
 
 import json
 import re
-import shutil
 import sys
 from pathlib import Path
 
@@ -30,6 +33,9 @@ _HR_RE = re.compile(r"^[-*_]{3,}$")
 # meta.json 的规范字段与顺序（§三）
 _META_FIELDS = ("id", "title", "created", "original_pages", "simplified_pages", "has_simplified")
 
+# 回程票 footer 的机器可读行（ADR-015：写 docId，**不写 URL**）
+_FOOTER_ANCHOR_RE = re.compile(r"<!--\s*course-digest:\s*docId=([^\s\n]+)[^>]*-->")
+
 # 覆盖率低于这个值就额外告警
 _COVERAGE_WARN = 50.0
 
@@ -40,6 +46,62 @@ _TITLE_MAX = 80
 def _fail(message: str) -> int:
     print(f"error: {message}", file=sys.stderr)
     return 1
+
+
+# ----------------------------------------------------------------------
+# 回程票 footer（ADR-015）
+#
+# 下载 summary.md 到本地后，用户要能用一条命令重开并排页面。md 里只写
+# **docId**、不写 URL —— 端口/pid 是易腐的，docId 稳定（ADR-014）。
+#
+# 三个纯函数不碰 IO，可全量单测；格式常量只在 build_footer 里定义一次。
+# ----------------------------------------------------------------------
+
+def _iter_footer_matches(text: str):
+    return _FOOTER_ANCHOR_RE.finditer(text)
+
+
+def parse_footer_doc_id(text: str) -> str | None:
+    """取**最后一个**回程票注释里的 docId；没有则 None。
+
+    取最后一个：正文里万一出现同形态的注释（概率≈0），真正生效的仍是尾部的票。
+    """
+    found = None
+    for m in _iter_footer_matches(text):
+        found = m
+    return found.group(1) if found else None
+
+
+def strip_footer(text: str) -> str:
+    """剥掉尾部回程票，返回**规范形正文**：尾部空白规范化、以单个 \\n 结尾。
+
+    规范形是幂等的前提。落盘口径是「规范形 + build_footer」，若剥离后正文的
+    尾部形态随是否带 footer 而变（无票时原文可能没有尾换行，带票时有多余空行），
+    两次 publish 的字节就会漂，「连发两次指纹不变」直接失败。
+    """
+    last = None
+    for m in _iter_footer_matches(text):
+        last = m
+    body = text[: last.start()] if last else text
+    body = body.rstrip()
+    return body + "\n" if body else ""
+
+
+def build_footer(doc_id: str) -> str:
+    """拼回程票 footer。格式常量只在这一处定义，改格式改这里。
+
+    两段：① HTML 注释（机器可读、渲染不可见，`key=value` 便于将来加字段）
+         ② `---` + `<sub>` 人读段（下载后翻到底就知道怎么重开）
+    人读段如实注明依赖本机仓库 + 数据目录 —— md 拷到别的机器就恢复不了页面，
+    此时 md 本身仍是完整总结。诚实比万能重要。
+    """
+    return (
+        f"\n<!-- course-digest: docId={doc_id} -->\n"
+        "\n---\n"
+        f"<sub>📄 由 course-digest 生成 · docId `{doc_id}` ·\n"
+        "重新打开页面：`python3 -m course_digest open 本md文件路径`"
+        "（需本机仓库与 ~/.course-digest 数据）</sub>\n"
+    )
 
 
 # ----------------------------------------------------------------------
@@ -224,8 +286,12 @@ def run(args) -> int:
         return _fail(f"summary 文件不存在：{summary_path}")
     text = summary_path.read_text(encoding="utf-8")
 
+    # 0) 读入即剥离回程票（ADR-015）：锚点校验与覆盖率统计都在**剥离后**的正文上做，
+    #    否则 footer 会被当成无锚段落拉低覆盖率。同路径重发也走这条路 → 天然幂等。
+    body = strip_footer(text)
+
     # 1) 锚点校验：不合格就报错退出，不静默通过
-    anchors, errors = validate_summary(text, original_pages)
+    anchors, errors = validate_summary(body, original_pages)
     if errors:
         for err in errors:
             print(f"error: {err}", file=sys.stderr)
@@ -261,7 +327,7 @@ def run(args) -> int:
                 )
 
     # 4) 锚点覆盖率
-    anchored, total = anchor_coverage(text)
+    anchored, total = anchor_coverage(body)
     pct = (100.0 * anchored / total) if total else 0.0
     print(f"锚点覆盖率：带锚点段落 {anchored} / 总段落 {total} = {pct:.0f}%", file=sys.stderr)
     if pct < _COVERAGE_WARN:
@@ -271,10 +337,10 @@ def run(args) -> int:
             file=sys.stderr,
         )
 
-    # 5) summary.md 落盘
+    # 5) summary.md 落盘：正文 + 回程票 footer（docId 的真相源是命令行参数，
+    #    不信任旧 footer 里写的值）；footer 不回流到 agent 输入的临时 md
     dest = (doc_dir / "summary.md").resolve()
-    if summary_path.resolve() != dest:
-        shutil.copyfile(summary_path, dest)
+    dest.write_text(body + build_footer(args.doc_id), encoding="utf-8")
     print(f"summary.md -> {dest}", file=sys.stderr)
 
     # 6) meta.json 补全（publish 是唯一最终写入者）

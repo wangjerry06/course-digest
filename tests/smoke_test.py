@@ -17,6 +17,7 @@ from course_digest import compress  # noqa: E402
 from course_digest import extract  # noqa: E402
 from course_digest import paths, simplify  # noqa: E402
 from course_digest import publish  # noqa: E402
+from course_digest import serve  # noqa: E402
 from course_digest.import_pdf import slugify  # noqa: E402
 from pypdf import PdfReader, PdfWriter  # noqa: E402
 
@@ -86,6 +87,56 @@ def make_fixture_doc(root: Path, doc_id: str, groups: list[dict], n_pages: int):
 
 def _g(gid, pages, kept, reason):
     return {"group": gid, "pages": pages, "kept_page": kept, "diff_lines": [], "reason": reason}
+
+
+def make_publishable_doc(root: Path, doc_id: str, n_pages: int = 2):
+    """造一个**可 publish** 的假文档：source.pdf + extract.json + meta.json。
+
+    每页各自成组、全部保留 → simplify 不删页，锚点不会落到已删页上，
+    可以把 publish 的行为单独隔离出来测。
+    """
+    doc_dir = make_fixture_doc(
+        root, doc_id, [_g(i, [i + 1], i + 1, "single") for i in range(n_pages)], n_pages
+    )
+    (doc_dir / "meta.json").write_text(
+        json.dumps(
+            {
+                "id": doc_id,
+                "title": doc_id,
+                "created": "2026-09-23T00:00:00+08:00",
+                "original_pages": n_pages,
+                "has_simplified": False,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    return doc_dir
+
+
+def publish_md(doc_id: str, md_text: str, tmp: Path, summary_path=None):
+    """跑一次 publish（把 serve 换成假的，绝不起真服务）。
+
+    返回 (rc, stdout, stderr, 输入 md 的路径) —— 输入 md 是 publish 的**只读**来源，
+    调用方可以据此断言它没被 footer 污染。
+
+    summary_path 给定时直接用那个现成文件（用来测「同路径发布」：拿已带 footer 的
+    docs/<id>/summary.md 当输入，这是幂等唯一真正的风险面）。
+    """
+    src = Path(summary_path) if summary_path is not None else (tmp / f"{doc_id}-input.md")
+    if summary_path is None:
+        src.write_text(md_text, encoding="utf-8")
+
+    saved = (serve.ensure_server, serve.open_browser)
+    serve.ensure_server = lambda: 12345
+    serve.open_browser = lambda d, p: f"http://127.0.0.1:{p}/doc/{d}"
+    try:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = publish.run(SimpleNamespace(doc_id=doc_id, summary=str(src), drop=None))
+    finally:
+        serve.ensure_server, serve.open_browser = saved
+    return rc, out.getvalue(), err.getvalue(), src
 
 
 def main():
@@ -514,6 +565,138 @@ def main():
         raises(ValueError, extract._parse_pages, "999", 39),
     )
     check("--pages 解析区间", extract._parse_pages("1-3,5", 39) == [1, 2, 3, 5])
+
+    # ==================================================================
+    # v0.1.1 · 回程票 footer（ADR-015）
+    # ==================================================================
+    _DOC = "2026-09-23-demo"
+    _BODY = "# 标题\n\n<!-- pages: 1 -->\n\n正文第一段\n\n<!-- pages: 2 -->\n\n正文第二段\n"
+    _FOOT = publish.build_footer(_DOC)
+    _TRUNC = _BODY + "<!-- course-digest: docId=2026-09-23-demo "      # 半截：缺 -->
+
+    # --- build_footer 形态 ---
+    check("footer: 含机器可读注释", f"<!-- course-digest: docId={_DOC} -->" in _FOOT)
+    check("footer: 人读段注明依赖本机数据", "~/.course-digest" in _FOOT)
+    check("footer: 人读段给出 open 命令", "course_digest open" in _FOOT)
+    check("footer: 不写 URL（ADR-015 核心）",
+          "http://" not in _FOOT and "127.0.0.1" not in _FOOT and "localhost" not in _FOOT)
+    check("footer: docId 只出现在注释与人读段各一处", _FOOT.count(_DOC) == 2)
+
+    # --- parse 三例：完整 / 无 / 截断 ---
+    check("parse: 完整 footer → docId", publish.parse_footer_doc_id(_BODY + _FOOT) == _DOC)
+    check("parse: 无 footer → None", publish.parse_footer_doc_id(_BODY) is None)
+    check("parse: 截断的半截注释 → None", publish.parse_footer_doc_id(_TRUNC) is None)
+    check("parse: 空字符串 → None", publish.parse_footer_doc_id("") is None)
+    check(
+        "parse: 取最后一个匹配（正文先出现同形态注释也不误伤）",
+        publish.parse_footer_doc_id("<!-- course-digest: docId=old-id -->\n\n正文\n" + _FOOT) == _DOC,
+    )
+    check(
+        "parse: 注释里带额外字段仍可解析（key=value 可扩展）",
+        publish.parse_footer_doc_id("<!-- course-digest: docId=d1 generated=2026-09-23 -->") == "d1",
+    )
+    check(
+        "parse: 非 course-digest 注释不认",
+        publish.parse_footer_doc_id("<!-- pages: 1 -->\n\n正文\n") is None,
+    )
+
+    # --- strip 正常：剥离后与追加前正文逐字节一致 ---
+    check("strip: 剥离后与追加前正文逐字节一致", publish.strip_footer(_BODY + _FOOT) == _BODY)
+    check("strip: 无 footer 且尾部无空白 → 规范化补一个换行",
+          publish.strip_footer("abc") == "abc\n")
+    check("strip: 尾部多个空行 → 收敛为一个换行", publish.strip_footer("abc\n\n\n") == "abc\n")
+    check("strip: 全文只有 footer → 空串", publish.strip_footer(_FOOT) == "")
+    check("strip: 空输入 → 空串", publish.strip_footer("") == "")
+    check("strip: 截断注释不当作 footer（正文保留）",
+          publish.strip_footer(_TRUNC).startswith(_BODY.rstrip()))
+
+    # --- footer 幂等：strip → append 跑两次，字符串相等 ---
+    _once = publish.strip_footer(_BODY + _FOOT) + _FOOT
+    _twice = publish.strip_footer(_once) + _FOOT
+    check("footer 幂等: strip→append 两次字符串相等", _once == _twice)
+    check("footer 幂等: 不叠加（注释只出现一次）", _once.count("course-digest: docId=") == 1)
+    check("footer 幂等: 正文没被改动", publish.strip_footer(_once) == _BODY)
+
+    # --- publish 落盘口径（端到端，假 serve）---
+    with tempfile.TemporaryDirectory() as td:
+        _tmp = Path(td)
+        _saved = paths.DOCS_DIR
+        paths.DOCS_DIR = _tmp / "docs"
+        paths.DOCS_DIR.mkdir(parents=True)
+        try:
+            _doc_dir = make_publishable_doc(paths.DOCS_DIR, "pad1", 2)
+            _md = "<!-- pages: 1 -->\n\n第一段\n\n<!-- pages: 2 -->\n\n第二段\n"
+            rc, out, err, src_md = publish_md("pad1", _md, _tmp)
+            _dest = _doc_dir / "summary.md"
+
+            check("publish: rc == 0", rc == 0)
+            check("publish: stdout 只有 URL（一行）",
+                  out == "http://127.0.0.1:12345/doc/pad1\n")
+            check("publish: 诊断全走 stderr", "锚点覆盖率" in err)
+            check("publish: 落盘带 footer",
+                  publish.parse_footer_doc_id(_dest.read_text(encoding="utf-8")) == "pad1")
+            check("publish: 落盘正文 == 剥离后正文",
+                  publish.strip_footer(_dest.read_text(encoding="utf-8")) == _md)
+            check("publish: 输入的临时 md 未被污染（footer 不回流）",
+                  publish.parse_footer_doc_id(src_md.read_text(encoding="utf-8")) is None)
+
+            # 覆盖率不被 footer 拉低（footer 在剥离后的文本上算）
+            check("publish: footer 不计入覆盖率",
+                  publish.anchor_coverage(publish.strip_footer(_dest.read_text(encoding="utf-8")))
+                  == (2, 2))
+
+            # 幂等：同一份输入连发两次，落盘字节不变
+            _first = _dest.read_bytes()
+            publish_md("pad1", _md, _tmp)
+            check("publish 幂等: 连发两次 summary.md 字节不变", _dest.read_bytes() == _first)
+
+            # 幂等（真正的风险面）：**同路径发布** —— 拿已带 footer 的落盘文件当输入。
+            # 没有 strip 的话这里会叠成两个 footer。
+            rc, _, _, _ = publish_md("pad1", "", _tmp, summary_path=_dest)
+            check("publish 幂等(同路径): rc == 0", rc == 0)
+            check("publish 幂等(同路径): 落盘字节不变", _dest.read_bytes() == _first)
+            check("publish 幂等(同路径): footer 不叠加",
+                  _dest.read_text(encoding="utf-8").count("course-digest: docId=") == 1)
+
+            # 幂等（等价路径）：输入是另一个文件，但内容已带 footer
+            _footered = _dest.read_text(encoding="utf-8")
+            publish_md("pad1", _footered, _tmp)
+            check("publish 幂等(输入已带票): 落盘字节不变", _dest.read_bytes() == _first)
+            check("publish 幂等(输入已带票): footer 不叠加",
+                  _dest.read_text(encoding="utf-8").count("course-digest: docId=") == 1)
+
+            # 边界：用户手动删了 footer 再 publish → 落盘补回新的
+            _dest.write_text(_md, encoding="utf-8")
+            publish_md("pad1", _md, _tmp)
+            check("publish 边界: 删掉 footer 后重发会补回",
+                  publish.parse_footer_doc_id(_dest.read_text(encoding="utf-8")) == "pad1")
+
+            # 边界：用户改了 footer 的 docId → 落盘以 args.doc_id 重建（不信任旧的）
+            _dest.write_text(_md + publish.build_footer("WRONG-ID"), encoding="utf-8")
+            publish_md("pad1", _md, _tmp)
+            _written = _dest.read_text(encoding="utf-8")
+            check("publish 边界: 落盘以 args.doc_id 重建 footer",
+                  publish.parse_footer_doc_id(_written) == "pad1")
+            check("publish 边界: 旧的错误 docId 不残留", "WRONG-ID" not in _written)
+            check("publish 边界: 改 footer 后正文仍逐字节一致",
+                  publish.strip_footer(_written) == _md)
+
+            # 边界：footer 被截断半截 → 正则认不出（要求完整 --> 收尾）→ 视同无 footer，
+            # 正文照原样通过并补一份完整的新 footer
+            rc2, _, _, _ = publish_md("pad1", _md + "<!-- course-digest: docId=pad1 ", _tmp)
+            check("publish 边界: footer 半截时仍能 publish", rc2 == 0)
+            check("publish 边界: footer 半截时补回完整票",
+                  publish.parse_footer_doc_id(_dest.read_text(encoding="utf-8")) == "pad1")
+
+            # 反向：坏锚点必须中止，且产物一字未动
+            _dest.write_text(_md + publish.build_footer("pad1"), encoding="utf-8")
+            _good = _dest.read_bytes()
+            rc3, out3, err3, _ = publish_md("pad1", "<!-- pages: 99 -->\n\n越界锚点\n", _tmp)
+            check("publish 反向: 坏锚点 rc == 1", rc3 == 1)
+            check("publish 反向: 坏锚点 stdout 为空", out3 == "")
+            check("publish 反向: 坏锚点产物未动", _dest.read_bytes() == _good)
+        finally:
+            paths.DOCS_DIR = _saved
 
     print("ALL PASS")
 
