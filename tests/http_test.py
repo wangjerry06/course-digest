@@ -54,6 +54,17 @@ def fetch(base, path):
         return exc.code, exc.headers.get("Content-Type", ""), exc.read()
 
 
+def fetch_headers(base, path):
+    """返回 (状态码, 小写化的响应头字典)。用来断言「没有某个头」。"""
+    req = urllib.request.Request(base + path)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as res:
+            status, headers = res.status, res.headers
+    except urllib.error.HTTPError as exc:
+        status, headers = exc.code, exc.headers
+    return status, {k.lower(): v for k, v in headers.items()}
+
+
 def make_doc(docs_dir: Path, doc_id: str) -> None:
     d = docs_dir / doc_id
     d.mkdir(parents=True)
@@ -71,7 +82,12 @@ def make_doc(docs_dir: Path, doc_id: str) -> None:
         ),
         encoding="utf-8",
     )
-    (d / "summary.md").write_text("<!-- pages: 1 -->\n内容\n", encoding="utf-8")
+    (d / "summary.md").write_text(
+        "<!-- pages: 1 -->\n内容\n\n"
+        f"<!-- course-digest: docId={doc_id} -->\n"
+        "\n---\n<sub>📄 由 course-digest 生成</sub>\n",
+        encoding="utf-8",
+    )
     (d / "page-map.json").write_text(
         json.dumps(
             {
@@ -104,6 +120,44 @@ def check_no_relative_assets():
     check("app.js 没有 ./ 相对 import", bad_import == [])
     bad_fetch = re.findall(r"""fetch\(\s*['"](\.{1,2}/[^'"]+)['"]""", js)
     check("app.js 没有 ./ 相对 fetch", bad_fetch == [])
+
+
+def check_buttons_wired():
+    """按钮存在 ≠ 按钮能用：id 改了 / 忘了绑事件都是静默失效（坑 #5 的同类）。
+
+    只做静态接线检查（HTML 里有这个 id、app.js 里引用了它），不值得起浏览器。
+    """
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    js = (WEB / "app.js").read_text(encoding="utf-8")
+    for btn in ("btn-download", "btn-pdf"):
+        check(f"index.html 有 #{btn}", f'id="{btn}"' in html)
+        check(f"app.js 引用了 #{btn}", f"#{btn}" in js)
+
+
+def check_pdf_download_route(base: str, doc_id: str):
+    """v0.1.1「下载 PDF」按钮走的就是这条路由，单独把契约钉住。"""
+    path = f"/api/doc/{doc_id}/pdf?version=simplified"
+    status, ctype, body = fetch(base, path)
+    check(f"{path} → 200", status == 200)
+    check("简化版 PDF → Content-Type application/pdf", ctype.startswith("application/pdf"))
+    check("简化版 PDF 有内容", body.startswith(b"%PDF"))
+
+    status, headers = fetch_headers(base, path)
+    check("简化版 PDF 响应无 Accept-Ranges（本项目不做 206）",
+          status == 200 and "accept-ranges" not in headers)
+
+    # 完整版同样无 Accept-Ranges；且不接受未知 version
+    _, full_headers = fetch_headers(base, f"/api/doc/{doc_id}/pdf?version=full")
+    check("完整版 PDF 响应同样无 Accept-Ranges", "accept-ranges" not in full_headers)
+    check("未知 version → 400",
+          fetch(base, f"/api/doc/{doc_id}/pdf?version=weird")[0] == 400)
+
+    # 回程票 footer 落盘后，服务必须**原样透传**（前端只渲染，不解析也不该丢）
+    _, _, payload = fetch(base, f"/api/doc/{doc_id}")
+    served = json.loads(payload)["summary_md"]
+    on_disk = (paths.DOCS_DIR / doc_id / "summary.md").read_text(encoding="utf-8")
+    check("summary_md 与磁盘逐字节一致（含回程票 footer）", served == on_disk)
+    check("透传内容里带着回程票", "course-digest: docId=" in served)
 
 
 # ----------------------------------------------------------------------
@@ -166,6 +220,7 @@ def check_http(base: str, doc_id: str):
 
 def main() -> None:
     check_no_relative_assets()
+    check_buttons_wired()
 
     saved_docs = paths.DOCS_DIR
     tmp = Path(tempfile.mkdtemp(prefix="cd-http-test-"))
@@ -180,6 +235,7 @@ def main() -> None:
     base = f"http://127.0.0.1:{srv.server_address[1]}"
     try:
         check_http(base, doc_id)
+        check_pdf_download_route(base, doc_id)
     finally:
         srv.shutdown()
         srv.server_close()

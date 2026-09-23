@@ -127,11 +127,14 @@ function attachAnchors(root) {
   }
 }
 
-const parsePages = (el) =>
-  (el.dataset.pages || '')
+/* 元素上的 data-pages → 页号数组。写成 function 声明是为了能被 node 直接抽出来测
+   （tests/frontend_test.js），箭头函数抽不出来。 */
+function parsePages(el) {
+  return (el.dataset.pages || '')
     .split(',')
     .map((s) => parseInt(s, 10))
     .filter((n) => Number.isInteger(n) && n > 0);
+}
 
 /* 三级回退规则（§三）：返回 {orig, rule}
  *   1. 第一个页号之后（含）最近的保留页
@@ -586,7 +589,18 @@ function updateVersionButtons() {
 /* ------------------------------------------------------------------ *
  * 导出（F5）：MD 已在本地磁盘，页面只提供「下载」
  * （「复制 MD」按钮 2026-09-19 裁掉 —— 下载已覆盖保存需求，复制源码无额外价值）
+ * PDF 同理：简化版 PDF 由服务端生成好了，这里只负责触发下载（v0.1.1）
  * ------------------------------------------------------------------ */
+
+/* 下载文件名。纯函数，单独拎出来是为了能被 node 直接测（tests/frontend_test.js）——
+   文件名拼错是那种「点了没反应/存下来叫 xxxxx.pdf」的低级但难自查的 bug。 */
+function mdDownloadName(docId) {
+  return `${docId || 'summary'}.md`;
+}
+
+function pdfDownloadName(docId) {
+  return `${docId || 'summary'}-simplified.pdf`;
+}
 
 function downloadMd() {
   const md = state.data.summary_md || '';
@@ -594,11 +608,25 @@ function downloadMd() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${state.data.meta.id || 'summary'}.md`;
+  a.download = mdDownloadName(state.data.meta.id);
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* 下载简化版 PDF：URL 由服务端在 /api/doc/<id> 里拼好（pdf_simplified），
+   前端**不构造路径** —— 路径一旦在这里手写，serve 改路由就会悄悄失联。
+   走 `<a download>`：本项目服务只绑 127.0.0.1，页面与 PDF 天然同源。 */
+function downloadPdf() {
+  const url = state.data.pdf_simplified;
+  if (!url) return;
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = pdfDownloadName(state.data.meta.id);
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 /* ------------------------------------------------------------------ *
@@ -608,6 +636,7 @@ function downloadMd() {
 function wireInteractions() {
   $('#md').addEventListener('click', onMdClick);
   $('#btn-download').addEventListener('click', downloadMd);
+  $('#btn-pdf').addEventListener('click', downloadPdf);
   $('#pdf-status').addEventListener('click', () => {
     if (statusRetry) statusRetry();
   });
