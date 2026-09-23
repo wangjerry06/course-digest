@@ -325,6 +325,152 @@ button:active { background: #e6e6e9; }
   text-decoration: underline;
 }
 
+/* ---------- 右：MD 编辑器（v0.1.3）----------
+   查看区（#md-scroll）与编辑器（#md-editor）是同一栏里的两个兄弟节点，
+   切模式只切 hidden：不重建 #md（#md 上挂着「点段落跳 PDF」的监听）。
+   字号一律用 var() / em —— 这条栏里的绝对 px 字号会被 frontend_test 的
+   「#md 区域内不许有绝对 px 字号」断言拦下（字号控件一改，px 就不跟了）。 */
+
+#md-editor[hidden], #md-scroll[hidden] { display: none; }
+
+.md-editor {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #fff;
+}
+
+.md-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #d8d8dc;
+}
+
+.md-toolbar button {
+  min-width: 2.4em;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: .92em;
+  font-weight: 600;
+}
+
+.md-split {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  min-height: 0;
+  background: #e6e6e9;      /* 1px 间隙透出的分栏线 */
+}
+
+/* min-width: 0 是必须的：grid 子项默认 min-width:auto，textarea 的固有宽度
+   会把左栏撑爆（分栏拖到极窄时 textarea 被挤出屏幕）。 */
+#md-textarea {
+  min-width: 0;
+  resize: none;
+  border: 0;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  /* 字号跟着 MD 字号控件走：编辑时看到的排面 = 保存后查看的排面 */
+  font-size: var(--md-font-size);
+  line-height: 1.6;
+  background: #fff;
+  color: #1d1d1f;
+  outline: none;
+}
+
+#md-preview {
+  min-width: 0;
+  padding: 12px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;   /* 长 URL / 长 token 不许把栏撑宽 */
+  font-size: var(--md-font-size);
+  line-height: 1.6;
+  background: #fff;
+  color: #1d1d1f;
+}
+
+/* 预览区的正文排版 —— 与上面 #md 那一套**刻意重复**一份：
+   选择器一旦写成 `#md, .md-preview`，就会把既有规则的写法搅在一起
+   （frontend_test 有几条按 `#md {` 形态写的静态断言会当场红）。 */
+.md-preview h2 {
+  font-size: 1.2em;
+  margin: 1.6em 0 .6em;
+  padding-bottom: .25em;
+  border-bottom: 1px solid #e6e6e9;
+}
+.md-preview h2:first-child { margin-top: 0; }
+.md-preview hr { border: none; border-top: 1px solid #ececf0; margin: 1.8em 0; }
+.md-preview p, .md-preview li { color: #333; }
+.md-preview code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .88em;
+  background: #f3f3f6;
+  padding: .12em .35em;
+  border-radius: 4px;
+}
+.md-preview pre {
+  background: #f7f7fa;
+  border: 1px solid #e6e6e9;
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow: auto;
+}
+.md-preview pre code { background: none; padding: 0; }
+.md-preview table { border-collapse: collapse; font-size: .93em; }
+.md-preview th, .md-preview td { border: 1px solid #e0e0e4; padding: 4px 10px; text-align: left; }
+.md-preview th { background: #f7f7fa; }
+
+/* 错误条（红）与警告条（黄）：红的是「存不下去」，黄的是「存下去了但要注意」 */
+#md-errors, #md-warn {
+  padding: 8px 12px;
+  border-top: 1px solid transparent;
+  max-height: 8em;
+  overflow-y: auto;
+  font-size: .86em;
+}
+#md-errors { background: #fff3f3; border-color: #fcc; color: #c00; }
+#md-warn { background: #fffaf0; border-color: #f5d99a; color: #8a5a00; }
+#md-errors[hidden], #md-warn[hidden] { display: none; }
+.md-error, .md-warn-item { margin: 2px 0; }
+
+.md-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 8px;
+  border-top: 1px solid #d8d8dc;
+  font-size: .86em;
+  color: #6e6e73;
+}
+
+.md-actions {
+  display: flex;
+  gap: 8px;
+  padding: 6px 8px;
+  border-top: 1px solid #d8d8dc;
+}
+.md-actions button { padding: 4px 12px; }
+
+#md-save {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+#md-save:hover { background: #0055aa; }
+#md-save:disabled { opacity: .5; cursor: default; }
+
+/* ≤900px 走上下堆叠：编辑器内部也从左右两栏改为上下两栏，
+   免得窄屏上 textarea 只剩几列宽（触摸设备的主战场） */
+@media (max-width: 900px) {
+  .md-split { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; }
+}
+
 @media print {
   #topbar, #pdf-pane { display: none; }
   #layout { display: block; height: auto; }

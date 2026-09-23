@@ -22,6 +22,12 @@
   </div>
 
   <div class="actions">
+    <!-- 查看 / 编辑分段：放在最前 —— 它决定右栏「看还是改」，比版本与字号更靠前 -->
+    <div class="segmented" id="mode-switch" role="group" aria-label="模式">
+      <button type="button" data-mode="view" class="active">查看</button>
+      <button type="button" data-mode="edit">编辑</button>
+    </div>
+
     <div class="segmented" id="version-switch" role="group" aria-label="PDF 版本">
       <button type="button" data-version="simplified" class="active">简化版</button>
       <button type="button" data-version="full">完整版</button>
@@ -67,6 +73,41 @@
   <aside id="md-pane" aria-label="总结">
     <div id="md-scroll">
       <article id="md"></article>
+    </div>
+
+    <!-- MD 编辑器（v0.1.3）。与 #md-scroll 是**兄弟节点**，切模式只切显隐 ——
+         绝不能把 #md 重建掉：#md 上挂着「点段落跳 PDF」的点击监听，重建即静默失联。
+         结构写在 HTML 而不是由 JS 拼 innerHTML，静态检查才看得见按钮与 aria。 -->
+    <div id="md-editor" class="md-editor" hidden>
+      <div class="md-toolbar" role="toolbar" aria-label="Markdown 工具栏">
+        <button type="button" data-act="bold" title="粗体（**文字**）" aria-label="粗体">B</button>
+        <button type="button" data-act="italic" title="斜体（*文字*）" aria-label="斜体">I</button>
+        <button type="button" data-act="link" title="链接（[文字](https://)）" aria-label="链接">Link</button>
+        <button type="button" data-act="ul" title="无序列表（光标所在行行首加 - ）" aria-label="无序列表">列表</button>
+        <button type="button" data-act="code" title="代码块" aria-label="代码块">代码块</button>
+        <button type="button" data-act="anchor" title="插入锚点注释（页号逗号分隔，例 5,6,8）"
+                aria-label="插入锚点">锚点</button>
+      </div>
+
+      <div class="md-split">
+        <textarea id="md-textarea" spellcheck="false"
+                  aria-label="总结正文（Markdown）"></textarea>
+        <!-- 预览是**只读视觉确认**：只跑 marked，不挂锚点、不绑跳转事件 -->
+        <div id="md-preview" class="md-preview" aria-label="预览（只读）"></div>
+      </div>
+
+      <div id="md-errors" role="alert" hidden></div>
+      <div id="md-warn" hidden></div>
+
+      <div class="md-status">
+        <span id="md-status">已加载</span>
+        <span id="md-counter">0 行 / 0 字符</span>
+      </div>
+
+      <div class="md-actions">
+        <button type="button" id="md-save">保存</button>
+        <button type="button" id="md-cancel">取消</button>
+      </div>
     </div>
   </aside>
 

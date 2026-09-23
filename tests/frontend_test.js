@@ -693,6 +693,425 @@ check('回归: #md 的点击监听仍指向 onMdClick',
 check('回归: data-pages 的生成方式没变（attachAnchors 原样）',
   /target\.dataset\.pages = pages\.join\(','\)/.test(SRC));
 
+/* ------------------------------------------------------------------ *
+ * MD 编辑器（v0.1.3）—— 纯函数
+ *   期望值全部先手算过（纪律 §E-5）。「光标挪到哪」这类断言最容易想当然，
+ *   所以每条的 newCursor 都从 slice 长度推出来，不凭印象写。
+ * ------------------------------------------------------------------ */
+
+const insertAtCursorText = load('insertAtCursorText');
+const toolbarInsert = load('toolbarInsert');
+const insertListMarker = load('insertListMarker');
+const anchorComment = load('anchorComment');
+const computeEditorStatus = load('computeEditorStatus');
+const updateCounter = load('updateCounter');
+const escapeHtml = load('escapeHtml');
+const stripFooterInJs = load('stripFooterInJs');
+const unanchoredWarnings = load('unanchoredWarnings');
+const draftWarnings = load('draftWarnings');
+const editorInitialText = load('editorInitialText', { stripFooterInJs });
+
+/* —— 光标处插入：**替换选区**，光标落在插入内容之后 —— */
+
+check('insert: 空选区插到中间 → 文本插进去、光标在插入内容之后',
+  eq(insertAtCursorText('X', 1, 1, 'abc'),
+     { newText: 'aXbc', newCursorStart: 2, newCursorEnd: 2 }));
+check('insert: 有选区 → 选区被**替换**（不是插在选区之前）',
+  eq(insertAtCursorText('**world**', 6, 11, 'hello world'),
+     { newText: 'hello **world**', newCursorStart: 15, newCursorEnd: 15 }));
+check('insert: 在文本末尾插入 → 追加，光标在最后',
+  eq(insertAtCursorText('!', 3, 3, 'abc'),
+     { newText: 'abc!', newCursorStart: 4, newCursorEnd: 4 }));
+check('insert: 在文本开头插入 → 前置，光标在插入内容之后',
+  eq(insertAtCursorText('# ', 0, 0, 'abc'),
+     { newText: '# abc', newCursorStart: 2, newCursorEnd: 2 }));
+check('insert: 插入空串 + 空选区 → 一个字都不变',
+  eq(insertAtCursorText('', 1, 1, 'abc'),
+     { newText: 'abc', newCursorStart: 1, newCursorEnd: 1 }));
+check('insert: 插入空串 + 有选区 → 等于删除选区（替换语义的必然结果）',
+  eq(insertAtCursorText('', 1, 3, 'abcd'),
+     { newText: 'ad', newCursorStart: 1, newCursorEnd: 1 }));
+check('insert: 空全文 + 空选区 → 结果就是插入内容',
+  eq(insertAtCursorText('**粗体**', 0, 0, ''),
+     { newText: '**粗体**', newCursorStart: 6, newCursorEnd: 6 }));
+check('insert: selectionEnd 越界 → 夹到末尾（不产生 undefined 拼接）',
+  eq(insertAtCursorText('Z', 1, 99, 'ab'),
+     { newText: 'aZ', newCursorStart: 2, newCursorEnd: 2 }));
+check('insert: selectionStart 越界 → 夹到末尾',
+  eq(insertAtCursorText('Z', 99, 99, 'ab'),
+     { newText: 'abZ', newCursorStart: 3, newCursorEnd: 3 }));
+check('insert: 非法选区（NaN / undefined）→ 当作 0（不崩、不写 NaN 进全文）',
+  eq(insertAtCursorText('Z', NaN, undefined, 'ab'),
+     { newText: 'Zab', newCursorStart: 1, newCursorEnd: 1 }));
+check('insert: end < start → 收成空选区（不会把区间内的字反向复制一遍）',
+  eq(insertAtCursorText('Z', 2, 0, 'abc'),
+     { newText: 'abZc', newCursorStart: 3, newCursorEnd: 3 }));
+check('insert: 全文不是字符串 → 当空串（不抛）',
+  eq(insertAtCursorText('Z', 0, 0, null),
+     { newText: 'Z', newCursorStart: 1, newCursorEnd: 1 }));
+
+/* —— 工具栏片段生成 —— */
+
+check('toolbarInsert: bold + 无选中 → **粗体**', toolbarInsert('bold', '') === '**粗体**');
+check('toolbarInsert: bold + 选中 X → **X**（不是 **X**X）', toolbarInsert('bold', 'X') === '**X**');
+check('toolbarInsert: italic + 无选中 → *斜体*', toolbarInsert('italic', '') === '*斜体*');
+check('toolbarInsert: italic + 选中 X → *X*', toolbarInsert('italic', 'X') === '*X*');
+check('toolbarInsert: link + 无选中 → [文字](https://)', toolbarInsert('link', '') === '[文字](https://)');
+check('toolbarInsert: link + 选中 X → [X](https://)', toolbarInsert('link', 'X') === '[X](https://)');
+check('toolbarInsert: code + 无选中 → 围栏包着占位「代码」',
+  toolbarInsert('code', '') === '\n```\n代码\n```\n');
+check('toolbarInsert: code + 有选中 → 把选中文字**裹进**围栏（不吃掉它）',
+  toolbarInsert('code', 'int x = 1;') === '\n```\nint x = 1;\n```\n');
+check('toolbarInsert: 未知动作 → 空串（调用方据此跳过插入）', toolbarInsert('unknown', '') === '');
+check('toolbarInsert: ul 交给调用方 → 空串', toolbarInsert('ul', 'x') === '');
+check('toolbarInsert: anchor 交给调用方 → 空串', toolbarInsert('anchor', 'x') === '');
+check('toolbarInsert: act 是 undefined → 空串（不抛）', toolbarInsert(undefined, '') === '');
+
+/* —— 无序列表：插在**光标所在行**的行首 —— */
+
+check('list: 光标在第二行中间 → 该行行首加 "- "，光标后移 2',
+  eq(insertListMarker('a\nbc', 3), { newText: 'a\n- bc', newCursor: 5 }));
+check('list: 光标刚过换行符（行首）→ 同一个结果',
+  eq(insertListMarker('a\nbc', 2), { newText: 'a\n- bc', newCursor: 4 }));
+check('list: 只有一行 → 行首就是文首',
+  eq(insertListMarker('first line', 5), { newText: '- first line', newCursor: 7 }));
+check('list: 空全文 → 只插出 "- "',
+  eq(insertListMarker('', 0), { newText: '- ', newCursor: 2 }));
+check('list: 光标在行尾 → 加在行首，光标落在行末之后',
+  eq(insertListMarker('ab', 2), { newText: '- ab', newCursor: 4 }));
+/* 记录真实行为：连点两次会得到 "- - text"（本轮不做「已有标记就跳过」的判断） */
+check('list: 已经有 "- " 的行再点一次 → 变成 "- - "（本轮不做去重，如实记录）',
+  eq(insertListMarker('- ab', 4), { newText: '- - ab', newCursor: 6 }));
+check('list: 光标越界 → 夹到末尾（不写出 undefined）',
+  eq(insertListMarker('ab', 99), { newText: '- ab', newCursor: 4 }));
+check('list: 光标是 NaN → 当作 0，按第一行处理',
+  eq(insertListMarker('ab', NaN), { newText: '- ab', newCursor: 2 }));
+check('list: 全文不是字符串 → 当空串（不抛）',
+  eq(insertListMarker(null, 0), { newText: '- ', newCursor: 2 }));
+
+/* —— 锚点注释生成 —— */
+
+check('anchor: 正常页号 → 约定格式的注释行',
+  anchorComment('5,6', 100) === '\n<!-- pages: 5,6 -->\n');
+check('anchor: 带空格的输入被规范化',
+  anchorComment(' 5 , 6 ', 100) === '\n<!-- pages: 5,6 -->\n');
+check('anchor: 单个页号', anchorComment('7', 100) === '\n<!-- pages: 7 -->\n');
+check('anchor: 夹在中间的垃圾被过滤，合法页号保留',
+  anchorComment('5,x,7', 100) === '\n<!-- pages: 5,7 -->\n');
+check('anchor: 空输入 → 空串（不插）', anchorComment('', 100) === '');
+check('anchor: 纯垃圾 → 空串', anchorComment('abc', 100) === '');
+check('anchor: 0 与负数都不是合法页号 → 空串', anchorComment('0,-3', 100) === '');
+check('anchor: 全是空白 → 空串', anchorComment('  ,  ', 100) === '');
+check('anchor: null / undefined → 空串（不抛）',
+  anchorComment(null, 100) === '' && anchorComment(undefined, 100) === '');
+check('anchor: 页号等于总页数 → 合法（边界是闭区间）',
+  anchorComment('100', 100) === '\n<!-- pages: 100 -->\n');
+check('anchor: 页号超过总页数 → 空串（当场拦，不留给服务端 400）',
+  anchorComment('101', 100) === '');
+check('anchor: 多个页号里只要有一个越界 → 整体拒绝（不插半截锚点）',
+  anchorComment('5,101', 100) === '');
+check('anchor: maxPage = 0（meta 还没读到）→ 不做天花板，只校验正数',
+  anchorComment('9999', 0) === '\n<!-- pages: 9999 -->\n');
+check('anchor: "5.5" 按 parseInt 取整成 5（与 parsePages 同一口径）',
+  anchorComment('5.5', 100) === '\n<!-- pages: 5 -->\n');
+
+/* —— 状态条文案 —— */
+
+check('status: 未改动 → 已加载', computeEditorStatus(false, null) === '已加载');
+check('status: 改过 → 未保存', computeEditorStatus(true, null) === '未保存');
+check('status: 保存中（不管脏不脏）→ 保存中…',
+  computeEditorStatus(false, 'loading') === '保存中…'
+  && computeEditorStatus(true, 'loading') === '保存中…');
+check('status: 失败（不管脏不脏）→ 保存失败',
+  computeEditorStatus(false, 'fail') === '保存失败'
+  && computeEditorStatus(true, 'fail') === '保存失败');
+check('status: 成功 → 覆盖脏标记显示「已保存」', computeEditorStatus(true, 'ok') === '已保存');
+check('status: 覆盖率 80 → 已保存（覆盖率 80%）',
+  computeEditorStatus(false, { coverage: 80 }) === '已保存（覆盖率 80%）');
+check('status: 覆盖率 33.3 → 四舍五入成 33%',
+  computeEditorStatus(false, { coverage: 33.3 }) === '已保存（覆盖率 33%）');
+check('status: 覆盖率 66.6 → 四舍五入成 67%',
+  computeEditorStatus(false, { coverage: 66.6 }) === '已保存（覆盖率 67%）');
+check('status: 覆盖率 0%（草稿还能存）→ 也照实回报',
+  computeEditorStatus(false, { coverage: 0 }) === '已保存（覆盖率 0%）');
+check('status: 没有 coverage 的裸对象 → 当没存过（不显示 NaN%）',
+  computeEditorStatus(false, {}) === '已加载');
+check('status: coverage 是 NaN → 退回脏标记（不显示 NaN%）',
+  computeEditorStatus(true, { coverage: NaN }) === '未保存');
+
+/* —— 行数 / 字符数 —— */
+
+check('counter: 三行 → 3 行 / 5 字符', updateCounter('a\nb\nc') === '3 行 / 5 字符');
+check('counter: 空串 → 仍是 1 行 / 0 字符', updateCounter('') === '1 行 / 0 字符');
+check('counter: 单行', updateCounter('abc') === '1 行 / 3 字符');
+check('counter: 结尾换行会多出一行', updateCounter('a\n') === '2 行 / 2 字符');
+check('counter: 非字符串 → 按空串算（不抛）', updateCounter(null) === '1 行 / 0 字符');
+/* 中文与 emoji：按**码点**数而不是 UTF-16 码元数，否则 1 个 emoji 会显示成 2 字符 */
+check('counter: 中文按字算', updateCounter('中文') === '1 行 / 2 字符');
+check('counter: emoji 算 1 个字符（不是 2）', updateCounter('😀') === '1 行 / 1 字符');
+
+/* —— HTML 转义（错误条要拼 innerHTML） —— */
+
+check('escape: 尖括号被转义', escapeHtml('<b>') === '&lt;b&gt;');
+check('escape: & 先于 < 处理（否则 &lt; 会被二次转义成 &amp;lt;）',
+  escapeHtml('&lt;') === '&amp;lt;');
+check('escape: 双引号', escapeHtml('"a"') === '&quot;a&quot;');
+check('escape: 单引号', escapeHtml("it's") === 'it&#39;s');
+check('escape: 中文 + 标签混排', escapeHtml('第 3 行：<script>') === '第 3 行：&lt;script&gt;');
+check('escape: 非字符串也能转义（不抛）', escapeHtml(123) === '123');
+
+/* —— 剥 footer（与 course_digest/footer.py 同口径） —— */
+
+check('strip: 正文 + 票 → 只留正文，尾部规范化成单个换行',
+  stripFooterInJs('正文\n<!-- course-digest: docId=foo -->\n---\n<sub>…</sub>\n') === '正文\n');
+check('strip: 没有票 → 原样（只把尾部空白规范化）',
+  stripFooterInJs('无 footer 正文') === '无 footer 正文\n');
+check('strip: 有两张票 → 只从**最后一张**截断（前一张留在正文里）',
+  stripFooterInJs('双 footer<!-- course-digest: docId=a -->\n<!-- course-digest: docId=b -->')
+  === '双 footer<!-- course-digest: docId=a -->\n');
+check('strip: 票前有多余空白 → 一起规范化掉',
+  stripFooterInJs('正文   \n\n<!-- course-digest: docId=x -->') === '正文\n');
+check('strip: 票后面没有换行也能剥',
+  stripFooterInJs('正文<!-- course-digest: docId=x -->') === '正文\n');
+/* 松匹配（只找 `<!-- course-digest:` 前缀）会把正文里的普通注释也当票剥掉 —— 所以要求 docId= */
+check('strip: 只有前缀、没有 docId= 的注释**不是**票（不能被误剥）',
+  stripFooterInJs('正文\n<!-- course-digest: 这不是票 -->\n') === '正文\n<!-- course-digest: 这不是票 -->\n');
+check('strip: 空串 → 空串（与 footer.py 一致，不是 "\\n"）', stripFooterInJs('') === '');
+check('strip: 纯空白 → 空串', stripFooterInJs('   \n\n') === '');
+check('strip: 非字符串 → 空串（不抛）',
+  stripFooterInJs(null) === '' && stripFooterInJs(undefined) === '');
+/* 记录与后端的共同口径（不是本批引入的）：票之后的东西会被一起截掉 */
+check('strip: 票之后还有正文 → 按后端同一口径一起截掉（口径一致，不是各自为政）',
+  stripFooterInJs('正文\n<!-- course-digest: docId=a -->\n票后正文') === '正文\n');
+
+/* —— 进编辑模式时编辑框放什么 —— */
+
+check('editorInit: 没有草稿 → 用已保存正文并剥掉 footer',
+  editorInitialText('abc\n<!-- course-digest: docId=x -->', null, false) === 'abc\n');
+check('editorInit: 有未保存草稿 → 用草稿（切模式不吞用户的编辑）',
+  editorInitialText('正文', '草稿内容', true) === '草稿内容');
+check('editorInit: 草稿还在但已保存过 → 用最新正文（草稿作废）',
+  editorInitialText('正文', '草稿内容', false) === '正文\n');
+check('editorInit: 标着未保存但没有草稿 → 退回已保存正文（不能给出 undefined）',
+  editorInitialText('正文', null, true) === '正文\n');
+check('editorInit: 都为空 → 空串', editorInitialText('', null, false) === '');
+check('editorInit: summary_md 缺失 → 空串（不抛）', editorInitialText(undefined, null, false) === '');
+
+/* —— 预览 HTML（只跑 marked） —— */
+
+let previewSeen = null;
+let previewCalls = 0;
+const fakePreviewWindow = {
+  marked: {
+    parse: (src, opts) => {
+      previewCalls += 1;
+      previewSeen = [src, opts];
+      return '<p>' + src + '</p>';
+    },
+  },
+};
+const previewHtml = load('previewHtml', { window: fakePreviewWindow });
+
+check('previewHtml: 用 marked 渲染，且 gfm: true（与查看区同一条渲染路径）',
+  previewHtml('# 标题') === '<p># 标题</p>' && previewSeen[1].gfm === true);
+check('previewHtml: 把原文原样交给 marked（不做任何预处理）', previewSeen[0] === '# 标题');
+check('previewHtml: 空串照常渲染（返回 marked 的结果，不短路）',
+  previewHtml('') === '<p></p>');
+check('previewHtml: null 当空串处理', previewHtml(null) === '<p></p>');
+previewCalls = 0;
+previewHtml('再调一次');
+check('previewHtml: 每次只调一次 marked.parse（不跑高亮 / 公式 / 锚点）', previewCalls === 1);
+
+/* —— 超长草稿提醒 —— */
+
+check('draftWarnings: 没到阈值 → 不提醒', eq(draftWarnings('abc', 10), []));
+check('draftWarnings: 正好等于阈值 → 不提醒（> 才算超）', eq(draftWarnings('abcdefghij', 10), []));
+check('draftWarnings: 超一个字符 → 提醒并带上真实长度',
+  eq(draftWarnings('abcdefghijk', 10), ['正文较长（11 字符，超过 10），预览与保存会变慢']));
+check('draftWarnings: 阈值 0 + 空串 → 不提醒', eq(draftWarnings('', 0), []));
+check('draftWarnings: 非字符串 → 不提醒（不抛）',
+  eq(draftWarnings(null, 10), []) && eq(draftWarnings(undefined, 10), []));
+
+/* —— 服务端回报的未锚定段落 → 人读文案 —— */
+
+check('unanchored: 空列表 → 空', eq(unanchoredWarnings([]), []));
+check('unanchored: null / 非数组 → 空（不抛）',
+  eq(unanchoredWarnings(null), []) && eq(unanchoredWarnings('x'), []));
+check('unanchored: 单项 → 行号 + 预览',
+  eq(unanchoredWarnings([{ line: 3, preview: '一段正文' }]),
+     ['第 3 行未加锚点：一段正文']));
+check('unanchored: 多项保持服务端给的顺序',
+  eq(unanchoredWarnings([{ line: 9, preview: 'B' }, { line: 2, preview: 'A' }]),
+     ['第 9 行未加锚点：B', '第 2 行未加锚点：A']));
+check('unanchored: 字段缺失 → 用占位符，不显示 undefined',
+  eq(unanchoredWarnings([{}]), ['第 ? 行未加锚点：']));
+check('unanchored: 非对象项不抛', eq(unanchoredWarnings(['x']), ['第 ? 行未加锚点：']));
+
+/* ------------------------------------------------------------------ *
+ * MD 编辑器 —— 接线与样式的静态断言
+ *   「函数写得对但没接上」是静态检查唯一抓得到的失效形态，而它最常见。
+ * ------------------------------------------------------------------ */
+
+const renderModeSrc = extract('renderMode');
+const renderEditorSrc = extract('renderEditor');
+const renderViewSrc = extract('renderView');
+const modeSwitchSrc = extract('onModeSwitch');
+const initEditorSrc = extract('initEditor');
+const saveSrc = extract('saveEditorDraft');
+const cancelSrc = extract('cancelEditorDraft');
+const toolbarActionSrc = extract('applyToolbarAction');
+const inputSrc = extract('onEditorInput');
+const previewRefreshSrc = extract('refreshEditorPreview');
+const writeSrc = extract('writeTextarea');
+const showErrSrc = extract('showEditorErrors');
+const statusSrc = extract('refreshEditorStatus');
+
+check('index.html: 顶栏有 查看/编辑 分段，且排在 简化版/完整版 之前',
+  /class="segmented" id="mode-switch" role="group" aria-label="模式"/.test(HTML)
+  && HTML.indexOf('id="mode-switch"') < HTML.indexOf('id="version-switch"'));
+check('index.html: 默认停在「查看」（与 state.mode 初值一致）',
+  /data-mode="view" class="active"/.test(HTML) && /mode:\s*'view'/.test(SRC));
+
+const toolbarHtml = (HTML.match(/<div class="md-toolbar"[\s\S]*?<\/div>/) || [''])[0];
+const acts = [...toolbarHtml.matchAll(/data-act="([a-z]+)"/g)].map((m) => m[1]);
+check('index.html: 工具栏六个动作齐全且顺序稳定',
+  eq(acts, ['bold', 'italic', 'link', 'ul', 'code', 'anchor']));
+check('index.html: 工具栏每个按钮都带 aria-label（触摸设备没有 hover）',
+  (toolbarHtml.match(/<button[^>]*aria-label="[^"]+"/g) || []).length === 6);
+check('index.html: 工具栏带 role=toolbar 与整体标签',
+  /class="md-toolbar" role="toolbar" aria-label="Markdown 工具栏"/.test(HTML));
+
+check('index.html: #md-editor 是 #md-scroll 的**兄弟**（在 </article></div> 之后）',
+  /<\/article>\s*<\/div>[\s\S]{0,400}<div id="md-editor"/.test(HTML));
+check('index.html: 编辑器默认 hidden（首屏是查看态）',
+  /<div id="md-editor" class="md-editor" hidden>/.test(HTML));
+check('index.html: #md-textarea 关掉 spellcheck（中文正文不该有英文拼写波浪线）',
+  /<textarea[^>]*id="md-textarea"[^>]*spellcheck="false"/.test(HTML));
+check('index.html: 编辑器的状态条 / 错误条 / 警告条 / 计数 都在',
+  /id="md-status"/.test(HTML) && /id="md-counter"/.test(HTML)
+  && /id="md-errors"[^>]*hidden/.test(HTML) && /id="md-warn"[^>]*hidden/.test(HTML));
+check('index.html: 保存 / 取消按钮都显式 type=button（别在别处变成 submit）',
+  /id="md-save"/.test(HTML) && /id="md-cancel"/.test(HTML)
+  && (HTML.match(/<button type="button" id="md-(save|cancel)"/g) || []).length === 2);
+
+check('app.js: state 里有 mode / hasUnsaved / editorDraft',
+  /mode:\s*'view'/.test(SRC) && /hasUnsaved:\s*false/.test(SRC) && /editorDraft:\s*null/.test(SRC));
+check('app.js: state 里有 mdStale / viewScroll（保存后重画 + 回来时看住滚动位置）',
+  /mdStale:\s*false/.test(SRC) && /viewScroll:\s*0/.test(SRC));
+check('app.js: main() 里真的调用了 initEditor()', /^\s*initEditor\(\);/m.test(SRC));
+check('app.js: renderMode() 分别走 renderView / renderEditor',
+  /renderEditor\(\);/.test(renderModeSrc) && /renderView\(\);/.test(renderModeSrc));
+
+check('app.js: 切编辑 = 隐藏查看区 + 显示编辑器（只切显隐，不重建 DOM）',
+  /scroller\.hidden = true;/.test(renderEditorSrc) && /editor\.hidden = false;/.test(renderEditorSrc));
+check('app.js: 切编辑不重画 #md（重建会丢掉它的点击监听）',
+  !/renderMarkdown\(\)/.test(renderEditorSrc));
+check('app.js: 切查看只切显隐；重画只在 mdStale 时做一次',
+  /editor\.hidden = true;/.test(renderViewSrc) && /if \(state\.mdStale\)/.test(renderViewSrc)
+  && /renderMarkdown\(\);/.test(renderViewSrc) && /buildBanners\(\);/.test(renderViewSrc));
+check('app.js: 滚动位置在解除隐藏**之后**才设回去（隐藏时设它无效）',
+  renderViewSrc.indexOf('scroller.hidden = false;') > -1
+  && renderViewSrc.indexOf('scroller.hidden = false;') < renderViewSrc.indexOf('scroller.scrollTop = state.viewScroll;'));
+check('app.js: 进编辑模式前记下查看区滚动位置', /state\.viewScroll = scroller\.scrollTop;/.test(renderEditorSrc));
+
+check('app.js: 离开编辑模式前有草稿保护 confirm',
+  /state\.mode === 'edit' && state\.hasUnsaved[\s\S]{0,60}confirm\('有未保存的修改/.test(modeSwitchSrc));
+check('app.js: 点当前模式不重复渲染（mode === state.mode 直接返回）',
+  /if \(mode === state\.mode\) return;/.test(modeSwitchSrc));
+check('app.js: 分段高亮按点击的那个按钮切（与版本分段同一套 active 写法）',
+  /classList\.toggle\('active', b === btn\)/.test(modeSwitchSrc));
+check('app.js: beforeunload 拦截关页面（编辑模式 + 未保存）',
+  /addEventListener\('beforeunload'/.test(initEditorSrc)
+  && /state\.mode === 'edit' && state\.hasUnsaved/.test(initEditorSrc)
+  && /ev\.preventDefault\(\)/.test(initEditorSrc));
+check('app.js: 工具栏 / 输入 / 保存 / 取消 / 模式分段 都接上了',
+  /button\[data-act\]/.test(initEditorSrc) && /'input', onEditorInput/.test(initEditorSrc)
+  && /'#md-save'\)\.addEventListener\('click', saveEditorDraft\)/.test(initEditorSrc)
+  && /'#md-cancel'\)\.addEventListener\('click', cancelEditorDraft\)/.test(initEditorSrc)
+  && /'#mode-switch'\)\.addEventListener\('click', onModeSwitch\)/.test(initEditorSrc));
+check('app.js: 取消 = 先问再丢草稿（未保存时不能静默丢）',
+  /if \(state\.hasUnsaved && !confirm\('放弃未保存的修改？'\)\) return;/.test(cancelSrc)
+  && /state\.editorDraft = null;/.test(cancelSrc));
+
+check('app.js: 工具栏与键盘共用一条回写路径（回写后派发 input）',
+  /dispatchEvent\(new Event\('input'\)\)/.test(writeSrc));
+check('app.js: 每次输入都标脏 + 刷预览 / 计数 / 状态条',
+  /state\.hasUnsaved = true;/.test(inputSrc) && /refreshEditorPreview\(\);/.test(inputSrc)
+  && /refreshEditorCounter\(\);/.test(inputSrc) && /refreshEditorStatus\(null\);/.test(inputSrc));
+check('app.js: 工具栏插入走 insertAtCursorText 纯函数',
+  /insertAtCursorText\(/.test(toolbarActionSrc) && /insertListMarker\(/.test(toolbarActionSrc));
+check('app.js: 锚点输入弹 prompt；取消 / 空输入什么都不做',
+  /prompt\('页号（逗号分隔）：', ''\)/.test(toolbarActionSrc)
+  && /if \(raw == null \|\| raw\.trim\(\) === ''\) return;/.test(toolbarActionSrc));
+check('app.js: 锚点页号越界当场拦下（不留给服务端 400）',
+  /anchorComment\(raw, ceiling\)/.test(toolbarActionSrc));
+check('app.js: 未知工具栏动作一个字都不动', /if \(!snippet\) return;/.test(toolbarActionSrc));
+
+check('app.js: 预览区只写 innerHTML，且只走 previewHtml',
+  /preview\.innerHTML = previewHtml\(ta\.value\)/.test(previewRefreshSrc));
+check('app.js: 预览区不挂锚点、不绑事件、不跑高亮与公式（只读视觉确认）',
+  !/attachAnchors|annotateAnchors|addEventListener|hljs|renderMathInElement/.test(previewRefreshSrc));
+
+check('app.js: 保存 POST 到 /api/doc/<id>/summary（docId 过 encodeURIComponent）',
+  /method: 'POST'/.test(saveSrc)
+  && /'\/api\/doc\/' \+ encodeURIComponent\(state\.data\.meta\.id\) \+ '\/summary'/.test(saveSrc));
+check('app.js: 保存后直接回填服务端的 summary_md（前端不自己拼 footer）',
+  /state\.data\.summary_md = data\.summary_md;/.test(saveSrc)
+  && !/course-digest: docId=\$\{/.test(saveSrc) && !/build_footer|buildFooter/.test(saveSrc));
+check('app.js: 保存中先切「保存中…」，失败切「保存失败」',
+  /refreshEditorStatus\('loading'\);/.test(saveSrc) && /refreshEditorStatus\('fail'\);/.test(saveSrc));
+check('app.js: 保存成功清脏标记 + 让查看区重画',
+  /state\.hasUnsaved = false;/.test(saveSrc) && /state\.mdStale = true;/.test(saveSrc));
+check('app.js: 失败时把服务端的 errors 逐条列出来（不是只扔一个「失败」）',
+  /data\.errors/.test(saveSrc) && /showEditorErrors\(errors\);/.test(saveSrc));
+check('app.js: 覆盖率不满 100% 用黄条列未锚段落（不阻止保存）',
+  /showEditorWarnings\(unanchoredWarnings\(data\.unanchored\)\);/.test(saveSrc));
+check('app.js: 网络异常也落到「保存失败」而不是静默',
+  /catch \(err\)[\s\S]{0,200}refreshEditorStatus\('fail'\);/.test(saveSrc));
+check('app.js: 错误条拼 innerHTML 前先转义', /escapeHtml\(e\)/.test(showErrSrc));
+check('app.js: 编辑器用自有 #md-status（不再借 PDF 的状态条）',
+  /\$\('#md-status'\)/.test(statusSrc) && !/pdf-status/.test(statusSrc));
+
+const maxDraftChars = Number((SRC.match(/const MAX_DRAFT_CHARS\s*=\s*(\d+)/) || [])[1]);
+check('app.js: 超长草稿阈值 = 100000（设计 §4：100KB 内流畅）', maxDraftChars === 100000);
+check('app.js: 输入与进编辑模式都拿这个阈值去算提醒',
+  /draftWarnings\(ta\.value, MAX_DRAFT_CHARS\)/.test(inputSrc)
+  && /draftWarnings\(ta\.value, MAX_DRAFT_CHARS\)/.test(renderEditorSrc));
+
+check('回归: 编辑器不碰 PDF 侧（不改版本 / 不重排 / 不重载）',
+  !/switchVersion|loadPdf|layoutPages|relayoutPdfKeepingPosition/.test(
+    toolbarActionSrc + renderEditorSrc + saveSrc));
+check('回归: app.js 不构造 footer（格式只由 footer.py 定义）',
+  !/course-digest: docId=\$\{/.test(SRC) && !/'<sub>/.test(SRC) && !/build_footer|buildFooter/.test(SRC));
+check('回归: MD → PDF 点击监听仍在 #md 上（编辑器没把它顶掉）',
+  /#md'\)\.addEventListener\('click',\s*onMdClick\)/.test(SRC));
+
+check('style.css: 编辑态靠 [hidden] 真隐藏（flex 容器上 hidden 会被 display 覆盖）',
+  /#md-editor\[hidden\],\s*#md-scroll\[hidden\]\s*\{[^}]*display:\s*none/.test(CSS));
+check('style.css: 编辑器纵向铺满（.md-editor 是 flex 列 + height 100%）',
+  /\.md-editor\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*height:\s*100%/.test(CSS));
+check('style.css: 编辑区两栏 = textarea + 预览（grid 1fr 1fr）',
+  /\.md-split\s*\{[^}]*grid-template-columns:\s*1fr\s+1fr/.test(CSS));
+check('style.css: textarea 等宽字体 + 跟着 --md-font-size（编辑排面 = 查看排面）',
+  /#md-textarea\s*\{[^}]*font-family:\s*ui-monospace[^}]*font-size:\s*var\(--md-font-size\)/.test(CSS));
+check('style.css: 预览区字号与查看区同一套变量',
+  /#md-preview\s*\{[^}]*font-size:\s*var\(--md-font-size\)/.test(CSS));
+check('style.css: textarea / 预览都 min-width: 0（分栏拖到极窄也不撑爆）',
+  /#md-textarea\s*\{[^}]*min-width:\s*0/.test(CSS) && /#md-preview\s*\{[^}]*min-width:\s*0/.test(CSS));
+check('style.css: 错误条红、警告条黄（两种反馈不混淆）',
+  /#md-errors\s*\{[^}]*color:\s*#c00/.test(CSS) && /#md-warn\s*\{[^}]*color:\s*#8a5a00/.test(CSS));
+check('style.css: 两个条也走 [hidden] 隐藏',
+  /#md-errors\[hidden\],\s*#md-warn\[hidden\]\s*\{[^}]*display:\s*none/.test(CSS));
+check('style.css: 保存按钮用品牌色 --accent',
+  /#md-save\s*\{[^}]*var\(--accent\)/.test(CSS));
+check('style.css: ≤900px 编辑区也改上下叠（触摸设备的主战场）',
+  /@media \(max-width:\s*900px\)[\s\S]*?\.md-split\s*\{[^}]*grid-template-columns:\s*1fr[^}]*grid-template-rows/.test(CSS));
+/* 编辑器的 #md-* 规则同样受「不许绝对 px 字号」约束 —— 否则字号控件带不动它们 */
+const editorPxFont = [...CSS.matchAll(
+  /#md-(?:editor|textarea|preview|errors|warn|save|cancel|status|counter)[^{]*\{[^}]*?font-size:\s*(\d+(?:\.\d+)?)px/g)];
+check('style.css: 编辑器里的 #md-* 规则没有绝对 px 字号（必须 var()/em）',
+  editorPxFont.length === 0);
+
 if (failed) {
   console.error(`\n${failed} 条失败`);
   process.exit(1);

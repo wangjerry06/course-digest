@@ -9,6 +9,10 @@
  *   - 每页容器的高度从 MediaBox 提前算出 → 首帧滚动条长度就是准的
  *   - IntersectionObserver 只渲染视口附近（前后各 2 页），滚远即丢 canvas
  *   - 不用内置 viewer.html（iframe 跨文档，联动做不了）
+ *
+ * 右栏两态（v0.1.3）：「查看」渲染总结，「编辑」是 textarea + 实时预览 + 工具栏。
+ * 两态是两个兄弟节点（#md-scroll / #md-editor），只切 hidden —— 不重建 #md，
+ * 因为 #md 上挂着 MD → PDF 的点击监听，重建它会静默失联。
  */
 
 import * as pdfjsLib from '/vendor/pdfjs/pdf.min.mjs';
@@ -37,6 +41,13 @@ const state = {
   pages: [],        // 每页的容器 div
   rendered: new Map(),
   observer: null,
+
+  /* ---- MD 编辑器（v0.1.3）---- */
+  mode: 'view',          // 'view' | 'edit'
+  hasUnsaved: false,     // 编辑框内容与「最后一次保存成功」的正文不同
+  editorDraft: null,     // 切走时留下的草稿文本（null = 没有草稿）
+  mdStale: false,        // 查看区 DOM 落后于 state.data.summary_md（保存过就要重画）
+  viewScroll: 0,         // 进编辑模式前查看区的滚动位置，切回来还回原位
 };
 
 /* ------------------------------------------------------------------ *
@@ -952,6 +963,387 @@ function initFontControls() {
 }
 
 /* ------------------------------------------------------------------ *
+ * MD 编辑器（v0.1.3）
+ *   查看 / 编辑两态共用右栏：#md-scroll（查看）与 #md-editor（编辑）是**兄弟节点**，
+ *   切模式只切 hidden —— 不重建 #md（它身上挂着 onMdClick，重建就静默失联）。
+ *   保存走 POST /api/doc/<id>/summary：校验链与 footer 都归服务端，前端不自己拼票。
+ * ------------------------------------------------------------------ */
+
+/* 超长草稿提醒的阈值（设计 §4：100KB 内流畅）。只提醒、不阻止。 */
+const MAX_DRAFT_CHARS = 100000;
+
+/* HTML 转义。错误条要显示服务端回来的文案（里面含用户自己正文的预览片段），
+   拼 innerHTML 前必须转义，否则正文里的 < 、> 会当场变成标签。 */
+function escapeHtml(text) {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/* 前端版 strip_footer：找**最后一个**回程票注释，从它的起点截断，尾部空白规范化。
+ * 匹配规则与 course_digest/footer.py 的 _FOOTER_ANCHOR_RE 同形（`course-digest:` 后面
+ * 必须跟 `docId=`），而不是只找 `<!-- course-digest:` 前缀 —— 松匹配会把正文里同前缀的
+ * 普通注释也当票剥掉。返回值口径同样对齐 footer.py：正文为空就返回空串。
+ * 写成 function 声明、不引用模块级常量，是为了能被 node 直接抽出来测。 */
+function stripFooterInJs(text) {
+  const src = typeof text === 'string' ? text : '';
+  const re = /<!--\s*course-digest:\s*docId=[^\s\n]+[^>]*-->/g;
+  let last = null;
+  for (let m = re.exec(src); m !== null; m = re.exec(src)) last = m;
+  const body = (last ? src.slice(0, last.index) : src).replace(/\s+$/, '');
+  return body ? body + '\n' : '';
+}
+
+/* 光标处插入：**替换**当前选区，光标落在插入内容之后。
+ * 语义是「替换」而不是「插在选区之前」—— 工具栏送进来的是**完整片段**（如 `**X**`），
+ * 若还把原选区拼在后面，会得到 `**X**X`（选中文字被复制一份）。 */
+function insertAtCursorText(text, selectionStart, selectionEnd, surroundingText) {
+  const value = typeof surroundingText === 'string' ? surroundingText : '';
+  const rawStart = Number(selectionStart);
+  const rawEnd = Number(selectionEnd);
+  const start = Number.isFinite(rawStart) ? Math.min(Math.max(rawStart, 0), value.length) : 0;
+  const end = Number.isFinite(rawEnd) ? Math.min(Math.max(rawEnd, start), value.length) : start;
+  const newText = value.slice(0, start) + text + value.slice(end);
+  const cursor = start + text.length;
+  return { newText, newCursorStart: cursor, newCursorEnd: cursor };
+}
+
+/* 工具栏按钮 → 要插入的 md 片段。ul / anchor 不在这里（它们不是「替换选区」语义，
+   由 applyToolbarAction 单独处理）；未知动作返回空串，调用方据此跳过插入。 */
+function toolbarInsert(act, selectedText) {
+  const sel = selectedText || '';
+  switch (act) {
+    case 'bold': return '**' + (sel || '粗体') + '**';
+    case 'italic': return '*' + (sel || '斜体') + '*';
+    case 'link': return '[' + (sel || '文字') + '](https://)';
+    /* 有选中就把它裹进围栏 —— 别让「插代码块」把用户选中的文字吃掉；没选中才放占位 */
+    case 'code': return sel ? '\n```\n' + sel + '\n```\n' : '\n```\n代码\n```\n';
+    default: return '';
+  }
+}
+
+/* 无序列表：在**光标所在行**的行首插 `- `，光标随之后移 2。 */
+function insertListMarker(text, cursor) {
+  const value = typeof text === 'string' ? text : '';
+  const raw = Number(cursor);
+  const at = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), value.length) : 0;
+  const lineStart = value.lastIndexOf('\n', at - 1) + 1;
+  return {
+    newText: value.slice(0, lineStart) + '- ' + value.slice(lineStart),
+    newCursor: at + 2,
+  };
+}
+
+/* 锚点输入（「5, 6,8」这种）→ 约定格式的注释行；页号全非法 / 越界 → 空串（调用方不插入）。
+ * 越界在这里就拦：锚点页号 > 总页数，服务端一定 400，不如当场说清楚。 */
+function anchorComment(rawPages, maxPage) {
+  const pages = String(rawPages == null ? '' : rawPages)
+    .split(',')
+    .map((s) => parseInt(s.trim(), 10))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (!pages.length) return '';
+  const ceiling = Number(maxPage);
+  if (Number.isFinite(ceiling) && ceiling > 0 && pages.some((p) => p > ceiling)) return '';
+  return '\n<!-- pages: ' + pages.join(',') + ' -->\n';
+}
+
+/* 状态条文案。lastResult = 「最后一次保存的结果」：
+ *   'loading' / 'fail' / 'ok' / { coverage } / null（还没存过） */
+function computeEditorStatus(hasUnsaved, lastResult) {
+  if (lastResult === 'loading') return '保存中…';
+  if (lastResult === 'fail') return '保存失败';
+  if (lastResult === 'ok') return '已保存';
+  if (lastResult && typeof lastResult === 'object' && Number.isFinite(lastResult.coverage)) {
+    return '已保存（覆盖率 ' + Math.round(lastResult.coverage) + '%）';
+  }
+  return hasUnsaved ? '未保存' : '已加载';
+}
+
+/* 状态条右侧的行数 / 字符数。
+ * 字符数按**码点**数（Array.from）而不是 str.length（UTF-16 码元）—— 后者会把一个
+ * emoji 或增补平面汉字算成 2 个字符，而这是用户会拿去核对的数字。 */
+function updateCounter(text) {
+  const value = typeof text === 'string' ? text : '';
+  return value.split('\n').length + ' 行 / ' + Array.from(value).length + ' 字符';
+}
+
+/* 预览 HTML。**只跑 marked**：不挂锚点、不绑跳转、不跑高亮与公式 ——
+ * 预览是「只读视觉确认」，点不动任何东西，也不该在每次按键时烧 CPU。
+ * 代价（已在 CHANGELOG 注明）：代码块没有配色、$公式$ 显示成源码，
+ * 切回查看模式即为最终渲染。 */
+function previewHtml(md) {
+  return window.marked.parse(md || '', { gfm: true });
+}
+
+/* 超长草稿提醒（只提醒、不阻止）。阈值由调用方传 MAX_DRAFT_CHARS ——
+ * 这样这条纯函数不依赖模块级常量，测试可以喂任意阈值。 */
+function draftWarnings(md, maxChars) {
+  const len = typeof md === 'string' ? md.length : 0;
+  if (!(len > maxChars)) return [];
+  return ['正文较长（' + len + ' 字符，超过 ' + maxChars + '），预览与保存会变慢'];
+}
+
+/* 服务端回报的未锚定段落 → 人读文案（行号 + 前 30 字符预览） */
+function unanchoredWarnings(unanchored) {
+  return (Array.isArray(unanchored) ? unanchored : [])
+    .map((u) => '第 ' + ((u && u.line) || '?') + ' 行未加锚点：' + ((u && u.preview) || ''));
+}
+
+/* 进编辑模式时编辑框该放什么：
+ *   有未保存草稿 → 用草稿（切模式不该吞掉用户没保存的编辑）
+ *   没有 → 用最新已保存正文，并剥掉 footer（footer 归工具管，不该给用户改） */
+function editorInitialText(summaryMd, draft, hasUnsaved) {
+  if (hasUnsaved && typeof draft === 'string') return draft;
+  return stripFooterInJs(summaryMd || '');
+}
+
+/* ---- 落 DOM 的那一层 ---- */
+
+function showEditorErrors(errors) {
+  const el = $('#md-errors');
+  if (!el) return;
+  const list = (errors || []).filter(Boolean);
+  el.innerHTML = list.map((e) => '<div class="md-error">' + escapeHtml(e) + '</div>').join('');
+  el.hidden = list.length === 0;
+}
+
+function showEditorWarnings(warnings) {
+  const el = $('#md-warn');
+  if (!el) return;
+  const list = (warnings || []).filter(Boolean);
+  el.innerHTML = list.map((w) => '<div class="md-warn-item">' + escapeHtml(w) + '</div>').join('');
+  el.hidden = list.length === 0;
+}
+
+function refreshEditorStatus(lastResult) {
+  const el = $('#md-status');
+  if (el) el.textContent = computeEditorStatus(state.hasUnsaved, lastResult);
+}
+
+function refreshEditorCounter() {
+  const ta = $('#md-textarea');
+  const el = $('#md-counter');
+  if (ta && el) el.textContent = updateCounter(ta.value);
+}
+
+function refreshEditorPreview() {
+  const ta = $('#md-textarea');
+  const preview = $('#md-preview');
+  if (ta && preview) preview.innerHTML = previewHtml(ta.value);
+}
+
+/* 回写编辑框并把选区放好，再派发 input —— 预览 / 计数 / 脏标记 / 状态条全挂在 input 上，
+   于是工具栏与键盘走的是同一条更新路径，不会出现「某个入口忘了刷新」。 */
+function writeTextarea(value, selStart, selEnd) {
+  const ta = $('#md-textarea');
+  if (!ta) return;
+  ta.value = value;
+  ta.selectionStart = selStart;
+  ta.selectionEnd = selEnd;
+  ta.dispatchEvent(new Event('input'));
+}
+
+function maxOriginalPage() {
+  const map = state.data && state.data.page_map;
+  const total = map && Number(map.total_original);
+  return Number.isFinite(total) && total > 0 ? total : 0;
+}
+
+/* 工具栏动作 → 改编辑框 */
+function applyToolbarAction(act) {
+  const ta = $('#md-textarea');
+  if (!ta) return;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  const value = ta.value;
+
+  if (act === 'ul') {
+    const r = insertListMarker(value, start);
+    writeTextarea(r.newText, r.newCursor, r.newCursor);
+    return;
+  }
+
+  if (act === 'anchor') {
+    const raw = prompt('页号（逗号分隔）：', '');
+    if (raw == null || raw.trim() === '') return;     // 取消 / 空输入：什么都不做
+    const ceiling = maxOriginalPage();
+    const comment = anchorComment(raw, ceiling);
+    if (!comment) {
+      showEditorErrors([
+        '锚点页号无效：只接受 1–' + (ceiling || '?') + ' 之间的正整数，逗号分隔（例：5,6,8）',
+      ]);
+      return;
+    }
+    showEditorErrors([]);
+    const r = insertAtCursorText(comment, start, end, value);
+    writeTextarea(r.newText, r.newCursorStart, r.newCursorEnd);
+    return;
+  }
+
+  const snippet = toolbarInsert(act, value.slice(start, end));
+  if (!snippet) return;                               // 未知动作：一个字都不动
+  const r = insertAtCursorText(snippet, start, end, value);
+  writeTextarea(r.newText, r.newCursorStart, r.newCursorEnd);
+}
+
+/* 编辑框每次改动：标脏 + 刷预览 / 计数 / 状态条。
+   顺手清掉上一次保存留下的错误条；警告条换成「当前草稿」的（超长提醒）。 */
+function onEditorInput() {
+  const ta = $('#md-textarea');
+  if (!ta) return;
+  state.hasUnsaved = true;
+  state.editorDraft = ta.value;
+  showEditorErrors([]);
+  showEditorWarnings(draftWarnings(ta.value, MAX_DRAFT_CHARS));
+  refreshEditorPreview();
+  refreshEditorCounter();
+  refreshEditorStatus(null);
+}
+
+function renderMode() {
+  if (state.mode === 'edit') renderEditor();
+  else renderView();
+}
+
+/* 切到编辑模式：显示编辑器、把正文放进去。
+   进编辑前记住查看区的滚动位置 —— 元素一旦 hidden，它的 scrollTop 就不可读了。 */
+function renderEditor() {
+  const scroller = $('#md-scroll');
+  const editor = $('#md-editor');
+  const ta = $('#md-textarea');
+  if (!scroller || !editor || !ta) return;
+
+  state.viewScroll = scroller.scrollTop;
+  ta.value = editorInitialText(state.data.summary_md || '', state.editorDraft, state.hasUnsaved);
+  state.editorDraft = ta.value;
+  scroller.hidden = true;
+  editor.hidden = false;
+
+  showEditorErrors([]);
+  showEditorWarnings(draftWarnings(ta.value, MAX_DRAFT_CHARS));
+  refreshEditorPreview();
+  refreshEditorCounter();
+  refreshEditorStatus(null);
+}
+
+/* 切回查看模式：**只切显隐**，刻意不重建 #md（重建会丢掉它的点击监听）。
+   只有保存过（mdStale）才重画一次，且重画放在解除隐藏之后 —— 隐藏期间设 scrollTop 是无效的。 */
+function renderView() {
+  const scroller = $('#md-scroll');
+  const editor = $('#md-editor');
+  if (editor) editor.hidden = true;
+  if (!scroller) return;
+  scroller.hidden = false;
+  if (state.mdStale) {
+    renderMarkdown();
+    buildBanners();
+    state.mdStale = false;
+  }
+  scroller.scrollTop = state.viewScroll;
+}
+
+function onModeSwitch(ev) {
+  const btn = ev.target.closest('button[data-mode]');
+  if (!btn) return;
+  const mode = btn.dataset.mode;
+  if (mode === state.mode) return;
+
+  /* 草稿保护：编辑模式下有未保存的改动 → 先问一句 */
+  if (state.mode === 'edit' && state.hasUnsaved
+      && !confirm('有未保存的修改，确定离开编辑模式？')) return;
+
+  state.mode = mode;
+  document.querySelectorAll('#mode-switch button').forEach((b) => {
+    b.classList.toggle('active', b === btn);
+  });
+  renderMode();
+}
+
+/* 保存：POST /api/doc/<id>/summary。校验 / footer / 落盘全在服务端，
+   前端**不自己拼 footer**（格式只由 footer.py 定义）—— 成功就回填服务端给的 summary_md。 */
+async function saveEditorDraft() {
+  const ta = $('#md-textarea');
+  if (!ta) return;
+  const md = ta.value;
+  state.editorDraft = md;
+
+  showEditorErrors([]);
+  showEditorWarnings([]);
+  refreshEditorStatus('loading');
+
+  try {
+    const resp = await fetch('/api/doc/' + encodeURIComponent(state.data.meta.id) + '/summary', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ summary_md: md }),
+    });
+    const data = await resp.json().catch(() => null);
+
+    if (!resp.ok || !data || !data.ok) {
+      const errors = (data && data.errors)
+        || [(data && data.error) || ('保存失败：HTTP ' + resp.status)];
+      showEditorErrors(errors);
+      showEditorWarnings(unanchoredWarnings(data && data.unanchored));
+      refreshEditorStatus('fail');
+      return;
+    }
+
+    state.data.summary_md = data.summary_md;
+    state.hasUnsaved = false;
+    state.editorDraft = null;
+    state.mdStale = true;                 // 查看区落后了，切回去时重画
+    showEditorWarnings(unanchoredWarnings(data.unanchored));
+    refreshEditorStatus({ coverage: data.coverage });
+  } catch (err) {
+    showEditorErrors(['保存失败：' + ((err && err.message) || err)]);
+    refreshEditorStatus('fail');
+  }
+}
+
+/* 取消：丢掉草稿回查看模式（改过就先问一次） */
+function cancelEditorDraft() {
+  if (state.hasUnsaved && !confirm('放弃未保存的修改？')) return;
+  state.hasUnsaved = false;
+  state.editorDraft = null;
+  showEditorErrors([]);
+  showEditorWarnings([]);
+  const viewBtn = document.querySelector('#mode-switch button[data-mode="view"]');
+  if (viewBtn) viewBtn.click();           // 复用同一条切换路径（含按钮高亮与显隐）
+}
+
+/* 编辑器接线。全部只接一次 —— 结构是静态 HTML，不存在「重建后监听丢失」的问题。 */
+function initEditor() {
+  const editor = $('#md-editor');
+  if (!editor) return;
+
+  editor.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('button[data-act]');
+    if (!btn) return;
+    applyToolbarAction(btn.dataset.act);
+  });
+
+  $('#md-textarea').addEventListener('input', onEditorInput);
+  $('#md-save').addEventListener('click', saveEditorDraft);
+  $('#md-cancel').addEventListener('click', cancelEditorDraft);
+
+  /* 模式分段的绑定风格与「简化版 / 完整版」一致（事件委托 + data-* 属性） */
+  $('#mode-switch').addEventListener('click', onModeSwitch);
+
+  /* 草稿保护：编辑模式下有未保存改动时关页面 / 刷新 → 浏览器原生确认框。
+     本页只有一篇文档，没有「切文档」这条交互，所以不必额外拦路由。 */
+  window.addEventListener('beforeunload', (ev) => {
+    if (state.mode === 'edit' && state.hasUnsaved) {
+      ev.preventDefault();
+      ev.returnValue = '';
+      return '';
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ *
  * 启动
  * ------------------------------------------------------------------ */
 
@@ -1003,6 +1395,7 @@ async function main() {
     renderMarkdown();
     buildBanners();
     wireInteractions();
+    initEditor();                  // 编辑器接线（模式分段 + 工具栏 + 保存 + 草稿保护）
     initSplitDrag();               // 先把存下来的分栏比例应用上，再布局 PDF（避免闪一下）
     initFontControls();            // 字号同理：PDF 倍率先就位，再让 switchVersion 去布局
     await switchVersion('simplified', { initial: true });
