@@ -27,7 +27,7 @@
       <button type="button" data-version="full">完整版</button>
     </div>
 
-    <!-- 字号控件：MD 与 PDF 是**两套独立语义**（MD 改排版 / PDF 改缩放，ADR-018），
+    <!-- 字号控件：MD 与 PDF 是**两套独立语义**（MD 改排版 / PDF 改缩放），
          所以两组控件、两套 localStorage 键，互不影响 -->
     <div class="font-controls" id="font-controls">
       <span class="font-group" data-target="pdf">
@@ -59,7 +59,7 @@
     <div id="pdf-status" class="status" hidden></div>
   </section>
 
-  <!-- 分栏拖拽手柄（ADR-017：不设限位，纯流式拖；≤900px 时隐藏，走 v0.1.0 的上下堆叠） -->
+  <!-- 分栏拖拽手柄（不设限位，纯流式拖；≤900px 时隐藏，走 v0.1.0 的上下堆叠） -->
   <div class="split-handle" id="split-handle" role="separator"
        aria-label="拖动调整左右分栏"></div>
 

@@ -10,8 +10,9 @@ simplified_pages / has_simplified / title；id 与 created 保持 import 时的�
 （created 是「创建时间」，不随 publish 刷新）。
 
 summary.md 的**唯一最终写入者**同样是 publish：落盘时在正文尾部追加回程票 footer
-（ADR-015，只写 docId 不写 URL，供 `open <md路径>` 恢复页面）。读入先 strip 再写，
-重复 publish 不叠加；校验与覆盖率统计一律在剥离后的正文上做。
+（只写 docId 不写 URL —— 端口会变、pid 会换，docId 稳定；供 `open <md路径>` 恢复
+页面）。读入先 strip 再写，重复 publish 不叠加；校验与覆盖率统计一律在剥离后的
+正文上做。
 """
 
 import json
@@ -33,7 +34,7 @@ _HR_RE = re.compile(r"^[-*_]{3,}$")
 # meta.json 的规范字段与顺序（§三）
 _META_FIELDS = ("id", "title", "created", "original_pages", "simplified_pages", "has_simplified")
 
-# 回程票 footer 的机器可读行（ADR-015：写 docId，**不写 URL**）
+# 回程票 footer 的机器可读行（写 docId，**不写 URL**：URL 易腐，docId 稳定）
 _FOOTER_ANCHOR_RE = re.compile(r"<!--\s*course-digest:\s*docId=([^\s\n]+)[^>]*-->")
 
 # 覆盖率低于这个值就额外告警
@@ -53,7 +54,7 @@ def _fail(message: str) -> int:
 
 
 # ----------------------------------------------------------------------
-# 回程票 footer（ADR-015）
+# 回程票 footer（写 docId 不写 URL）
 #
 # 下载 summary.md 到本地后，用户要能用一条命令重开并排页面。md 里只写
 # **docId**、不写 URL —— 端口/pid 是易腐的，docId 稳定（ADR-014）。
@@ -318,7 +319,7 @@ def run(args) -> int:
         return _fail(f"summary 文件不存在：{summary_path}")
     text = summary_path.read_text(encoding="utf-8")
 
-    # 0) 读入即剥离回程票（ADR-015）：锚点校验与覆盖率统计都在**剥离后**的正文上做，
+    # 0) 读入即剥离回程票：锚点校验与覆盖率统计都在**剥离后**的正文上做，
     #    否则 footer 会被当成无锚段落拉低覆盖率。同路径重发也走这条路 → 天然幂等。
     body = strip_footer(text)
 
@@ -408,7 +409,7 @@ def run(args) -> int:
 # ----------------------------------------------------------------------
 
 def open_doc(args) -> int:
-    # 参数可以是 docId，也可以是**下载到本地的 summary.md 路径**（ADR-015 的配套：
+    # 参数可以是 docId，也可以是**下载到本地的 summary.md 路径**（回程票的配套：
     # 没有这条，回程票是死的）。只认注释内容，不要求文件名叫 summary.md ——
     # 用户下载后随便改名都能开。
     raw = args.target

@@ -33,7 +33,7 @@ const state = {
   pdf: null,
   sizes: [],        // [{w,h}]：scale=1 时的页面尺寸
   scale: 1,
-  pdfZoom: 1,       // 用户缩放倍率（100% = 刚好铺满左栏，ADR-018）
+  pdfZoom: 1,       // 用户缩放倍率（100% = 刚好铺满左栏）
   pages: [],        // 每页的容器 div
   rendered: new Map(),
   observer: null,
@@ -151,7 +151,7 @@ function anchorTooltip(pages) {
     : `点击跳转到第 ${first}–${last} 页`;
 }
 
-/* 给所有可点元素挂原生 title 气泡（ADR-016：零依赖 + 可访问性天然满足，
+/* 给所有可点元素挂原生 title 气泡（用原生 title：零依赖 + 可访问性天然满足，
    不自己画 tooltip）。表格 / 代码块本身就是 [data-pages] 元素，一起覆盖。 */
 function annotateAnchors(root) {
   for (const el of root.querySelectorAll('[data-pages]')) {
@@ -282,7 +282,7 @@ function renderMarkdown() {
   article.innerHTML = window.marked.parse(state.data.summary_md || '', { gfm: true });
 
   attachAnchors(article);
-  annotateAnchors(article);       // 挂「点击跳转到第 N 页」气泡（ADR-016）
+  annotateAnchors(article);       // 挂「点击跳转到第 N 页」气泡
 
   // 顺序：先 hljs（只认 <pre><code>），再 KaTeX（会插入自己的 DOM）
   article.querySelectorAll('pre code').forEach((block) => {
@@ -386,7 +386,7 @@ function layoutPages() {
   const avail = Math.max(200, $('#pdf-scroll').clientWidth - 24);
   /* 「适配容器宽度」这一步照旧受 MAX_SCALE 约束；用户缩放是**在它之上再乘**的，
      所以宽屏上把 160% 悄悄吃掉是不对的 —— 单独给最终值一个上限（MAX_SCALE ×
-     最大倍率），只防失控，不压缩用户意图（ADR-018）。 */
+     最大倍率），只防失控，不压缩用户意图。 */
   const fit = Math.min(MAX_SCALE, avail / state.sizes[0].w);
   const scale = Math.min(fit * state.pdfZoom, MAX_SCALE * MAX_ZOOM);
   state.scale = scale;
@@ -670,14 +670,14 @@ function downloadPdf() {
 }
 
 /* ------------------------------------------------------------------ *
- * 分栏拖拽（F8，ADR-017：**不设限位**，纯流式拖）
+ * 分栏拖拽（F8：**不设限位**，纯流式拖）
  * ------------------------------------------------------------------ */
 
 /* 手柄轨道宽度，与 style.css 的 grid-template-columns 中间那一列保持一致 */
 const SPLIT_HANDLE_PX = 6;
 
 /* 鼠标 x → 左栏占比字符串。纯函数（node 里可测）。
-   不设最小宽度（ADR-017：用户控制权 > 防误操作），只把值夹进 0%~100% ——
+   不设最小宽度（用户控制权 > 防误操作），只把值夹进 0%~100% ——
    越界的百分比会算出负的列宽或溢出容器。 */
 function splitPercent(clientX, layoutLeft, layoutWidth, handlePx) {
   const usable = layoutWidth - handlePx;
@@ -762,7 +762,7 @@ function initSplitDrag() {
 }
 
 /* ------------------------------------------------------------------ *
- * 字号调整（F7，ADR-018：按**内容载体**分两路）
+ * 字号调整（F7：按**内容载体**分两路）
  *   MD  → CSS 变量 --md-font-size，浏览器自动重排，零重渲成本
  *   PDF → PDF.js 的 scale（canvas 渲染，CSS 改不动），要重渲可见页
  * 两者语义不同，所以是两套独立控件 + 两套独立 localStorage 键，

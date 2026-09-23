@@ -2,7 +2,7 @@
 /* 前端纯逻辑冒烟测试（plain node，零依赖）。
  *
  * 为什么不做浏览器测试：本项目的老规矩是「**用真函数源码 + 合成数据在 node 里跑**」
- * （见交接包 05-验证清单 §三）。真函数源码是从 app.js 里**读出来再 eval** 的，
+ * （本项目的验证惯例）。真函数源码是从 app.js 里**读出来再 eval** 的，
  * 不是在这儿抄一份 —— 所以改了 app.js 而忘了这里的期望值，测试会立刻红。
  *
  * 覆盖不到的东西（留给手测）：CSS 视觉效果、pointer 拖拽手感、canvas 渲染。
@@ -135,7 +135,7 @@ check('parsePages: 过滤 NaN / 0 / 负数',
   eq(parsePages({ dataset: { pages: '5,x,-1,0,7' } }), [5, 7]));
 
 /* ------------------------------------------------------------------ *
- * 锚点提示：文案 + 挂载（ADR-016）
+ * 锚点提示：文案 + 挂载
  * ------------------------------------------------------------------ */
 
 const anchorTooltip = load('anchorTooltip');
@@ -229,7 +229,7 @@ check('style.css: ▸ 通用选择器能覆盖表格（不写死 p）',
   !/#md p\[data-pages\]/.test(CSS) && /#md \[data-pages\]/.test(CSS));
 
 /* ------------------------------------------------------------------ *
- * 分栏拖拽（F8，ADR-017：不设限位）
+ * 分栏拖拽（F8：不设限位）
  * ------------------------------------------------------------------ */
 
 const splitPercent = load('splitPercent');
@@ -252,7 +252,7 @@ check('splitPercent: 手柄贴最右 → 100%',
 // 2006 - 6 = 2000 可用；手柄中心 500 → 正好 1/4
 check('splitPercent: 左侧 1/4',
   splitPercent(503, 0, 2006, 6) === '25.00%');
-check('splitPercent: 拖到最左 → 夹到 0%（ADR-017 允许，但值不能为负）',
+check('splitPercent: 拖到最左 → 夹到 0%（不设限位，但值不能为负）',
   splitPercent(0, 0, 1000, 6) === '0.00%');
 check('splitPercent: 拖到最右 → 夹到 100%（不能溢出容器）',
   splitPercent(1000, 0, 1000, 6) === '100.00%');
@@ -317,7 +317,7 @@ check(`几何: CSS 手柄轨道(${trackPx}px) 与 JS 常量(${jsHandlePx}px) 一
   trackPx > 0 && trackPx === jsHandlePx);
 
 /* ------------------------------------------------------------------ *
- * 字号调整（F7，ADR-018：MD / PDF 两路独立）
+ * 字号调整（F7：MD / PDF 两路独立）
  * ------------------------------------------------------------------ */
 
 /* const 常量也照「真源码」来：从 app.js 里切出 `const NAME = ...;` 再 eval，
@@ -367,7 +367,7 @@ check('clampNumber: 超上限夹回', clampNumber('999', 16, 12, 24) === 24);
 check('clampNumber: 超下限夹回', clampNumber('-5', 16, 12, 24) === 12);
 check('clampNumber: 小数值（PDF 档）可用', clampNumber('1.4', 1.0, 0.8, 1.6) === 1.4);
 
-check('fontKey: MD 与 PDF 是两套独立的键（ADR-018）',
+check('fontKey: MD 与 PDF 是两套独立的键',
   fontKey('md', 'doc1') === 'course-digest:doc1:font-md'
   && fontKey('pdf', 'doc1') === 'course-digest:doc1:font-pdf');
 check('fontKey: 不同 docId 互不干扰',

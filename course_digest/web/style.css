@@ -6,10 +6,10 @@
 * { box-sizing: border-box; }
 
 :root {
-  /* 品牌色：悬停高亮、段首 ▸、分栏手柄都用它，改一处全跟（ADR-016） */
+  /* 品牌色：悬停高亮、段首 ▸、分栏手柄都用它，改一处全跟 */
   --accent: #0066cc;
 
-  /* 总结正文字号：由「MD − / +」控件改（ADR-018：MD 走 CSS 变量，
+  /* 总结正文字号：由「MD − / +」控件改（MD 走 CSS 变量，
      浏览器自动重排，零重渲成本）。12-24px，默认 16。 */
   --md-font-size: 16px;
 }
@@ -68,7 +68,7 @@ button:active { background: #e6e6e9; }
   z-index: 1;
 }
 
-/* ---------- 字号控件（F7，ADR-018：MD / PDF 两套独立语义）---------- */
+/* ---------- 字号控件（F7：MD / PDF 两套独立语义）---------- */
 
 .font-controls { display: flex; align-items: center; gap: 10px; }
 .font-group { display: inline-flex; align-items: center; gap: 2px; }
@@ -104,7 +104,7 @@ button:active { background: #e6e6e9; }
 /* 左右分栏的分界线交给手柄来画，pane 自己不再画右边框（否则一条线会变两条） */
 #pdf-pane { background: #3a3a3c; }
 
-/* ---------- 分栏拖拽手柄（F8，ADR-017） ---------- */
+/* ---------- 分栏拖拽手柄（F8） ---------- */
 
 .split-handle {
   position: relative;
@@ -257,7 +257,7 @@ button:active { background: #e6e6e9; }
 #md [data-pages] { cursor: pointer; }
 #md [data-pages]:hover { background: #f0f7ff; }
 
-/* 段首 ▸ —— 可点击的**主信号**是它，不是气泡（ADR-016：发现性问题）。
+/* 段首 ▸ —— 可点击的**主信号**是它，不是气泡（发现性问题）。
    用绝对定位挂在内容左侧的 padding 区里（14px < #md 的 24px 左内边距）：
    既不引起重排，也不会在字号调到 24px 时被挤出容器。
    表格 / 代码块本身就是 [data-pages] 元素，这条通用选择器一起覆盖，零额外代码。 */
@@ -274,7 +274,7 @@ button:active { background: #e6e6e9; }
 }
 #md [data-pages]:hover::before { opacity: .6; }
 
-/* 触摸设备没有 hover：▸ 常显，发现性不丢（ADR-016） */
+/* 触摸设备没有 hover：▸ 常显，发现性不丢 */
 @media (hover: none) {
   #md [data-pages]::before { opacity: .4; }
 }

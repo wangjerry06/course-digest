@@ -581,7 +581,7 @@ def main():
     check("--pages 解析区间", extract._parse_pages("1-3,5", 39) == [1, 2, 3, 5])
 
     # ==================================================================
-    # v0.1.1 · 回程票 footer（ADR-015）
+    # v0.1.1 · 回程票 footer（写 docId 不写 URL）
     # ==================================================================
     _DOC = "2026-09-23-demo"
     _BODY = "# 标题\n\n<!-- pages: 1 -->\n\n正文第一段\n\n<!-- pages: 2 -->\n\n正文第二段\n"
@@ -592,7 +592,7 @@ def main():
     check("footer: 含机器可读注释", f"<!-- course-digest: docId={_DOC} -->" in _FOOT)
     check("footer: 人读段注明依赖本机数据", "~/.course-digest" in _FOOT)
     check("footer: 人读段给出 open 命令", "course_digest open" in _FOOT)
-    check("footer: 不写 URL（ADR-015 核心）",
+    check("footer: 不写 URL（回程票的核心）",
           "http://" not in _FOOT and "127.0.0.1" not in _FOOT and "localhost" not in _FOOT)
     check("footer: docId 只出现在注释与人读段各一处", _FOOT.count(_DOC) == 2)
 
@@ -734,7 +734,7 @@ def main():
             check("publish 边界: footer 半截时补回完整票",
                   publish.parse_footer_doc_id(_dest.read_text(encoding="utf-8")) == "pad1")
 
-            # --- open：支持传 summary.md 路径（ADR-015 的配套）---
+            # --- open：支持传 summary.md 路径（回程票的配套）---
             rc, out, err = open_target("pad1")
             check("open(docId): 原逻辑不变，rc == 0 且输出 URL",
                   rc == 0 and out.strip() == "http://127.0.0.1:12345/doc/pad1")
