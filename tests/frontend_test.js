@@ -53,7 +53,7 @@ const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 /* ------------------------------------------------------------------ *
  * 语法自检：拼错括号、漏逗号这类错误在浏览器里的表现是「整页白屏 +
- * 只有 module 报错」，而且服务端日志全是 200（坑 #5 的形态）。这里先拦一道。
+ * 只有 module 报错」，而且服务端日志全是 200（与「前端资产用相对路径」那类事故同一个形态）。这里先拦一道。
  * import 必须写在顶层，所以摘掉 import 行再整体编译。
  * ------------------------------------------------------------------ */
 
@@ -82,7 +82,7 @@ check('pdfDownloadName: docId 缺失时兜底 summary',
 check('pdfDownloadName: 与 MD 名不撞车', pdfName('x') !== mdName('x'));
 
 /* ------------------------------------------------------------------ *
- * 锚点三级回退（§三）—— 现有逻辑，真数据只触发得到规则 1
+ * 锚点三级回退 —— 现有逻辑，真数据只触发得到规则 1
  * ------------------------------------------------------------------ */
 
 const MAP = {
@@ -201,7 +201,7 @@ check(`几何: ▸ 悬挂 ${hanging}px < #md 左内边距 ${padLeft}px → 不�
 /* ------------------------------------------------------------------ *
  * 用**真渲染器**（vendored marked）验证「锚点注释后面紧跟的是哪个元素」。
  * 前端靠 nextElementAfter() 找宿主元素；表格 / 代码块能不能被标上 data-pages
- * 完全取决于这一步（坑 #10：引导句 + 空行 + 表格是两个块，表格前必须再补一行锚点）。
+ * 完全取决于这一步（引导句 + 空行 + 表格是两个块，表格前必须再补一行锚点）。
  * ------------------------------------------------------------------ */
 
 const marked = require(path.join(
@@ -222,14 +222,15 @@ check('marked: 锚点注释原样保留（不转义、不吞掉）',
   sampleHtml.includes('<!-- pages: 8 -->'));
 check('marked: 锚点数量与输入一致', hosts.length === 4);
 check('marked: 正文前的锚点 → 落在 <p>', eq(hosts[0], ['5', '<p']));
-check('marked: 表格前的锚点 → 落在 <table>（坑 #10）', eq(hosts[1], ['6', '<table']));
+check('marked: 表格前的锚点 → 落在 <table>', eq(hosts[1], ['6', '<table']));
 check('marked: 代码块前的锚点 → 落在 <pre>', eq(hosts[2], ['7', '<pre']));
 
-check('style.css: ▸ 通用选择器能覆盖表格（不写死 p）',
-  !/#md p\[data-pages\]/.test(CSS) && /#md \[data-pages\]/.test(CSS));
+check('style.css: ▸ 用的是通用 `[data-pages]` 选择器，没有限定标签',
+  /#md \[data-pages\]::before\s*\{/.test(CSS)
+  && !/#md [a-z]+\[data-pages\]/.test(CSS));   // 限定标签（如 #md p[data-pages]）就会漏掉表格/代码块
 
 /* ------------------------------------------------------------------ *
- * 分栏拖拽（F8：不设限位）
+ * 分栏拖拽（不设限位）
  * ------------------------------------------------------------------ */
 
 const splitPercent = load('splitPercent');
@@ -302,11 +303,16 @@ check('app.js: pointermove 节流到 rAF（不是每个事件都写 DOM）',
 check('app.js: 拖动结束会重算 PDF 布局（否则留着旧宽度）',
   /const visible = currentVisiblePage\(\);\s*\n\s*layoutPages\(\);\s*\n\s*observePages\(\);\s*\n\s*scrollToPage\(visible\);/
     .test(SRC));
-/* 「函数写了但没调用」是纯静态检查唯一抓得到的失效形态，而它恰恰最常见 */
+/* 「函数写了但没调用」是纯静态检查唯一抓得到的失效形态，而它恰恰最常见。
+   注意要**在函数体里**找调用点并按调用位置断言：只在整个文件里搜字符串的话，
+   调用被挪出渲染路径（比如挪出 renderMarkdown）测试照样绿。 */
+const renderMarkdownSrc = extract('renderMarkdown');
+check('app.js: renderMarkdown() 里真的调用了 annotateAnchors()',
+  /annotateAnchors\(article\);/.test(renderMarkdownSrc));
+check('app.js: main() 里真的调用了 renderMarkdown()',
+  /^\s*renderMarkdown\(\);/m.test(SRC));
 check('app.js: main() 里真的调用了 initSplitDrag()',
   /^\s*initSplitDrag\(\);/m.test(SRC));
-check('app.js: main() 里真的调用了 annotateAnchors()',
-  /annotateAnchors\(article\);/.test(SRC));
 
 /* 手柄轨道宽度必须与 JS 里的常量一致，否则 splitPercent 会算偏 */
 const trackPx = Number(
@@ -317,7 +323,7 @@ check(`几何: CSS 手柄轨道(${trackPx}px) 与 JS 常量(${jsHandlePx}px) 一
   trackPx > 0 && trackPx === jsHandlePx);
 
 /* ------------------------------------------------------------------ *
- * 字号调整（F7：MD / PDF 两路独立）
+ * 字号调整（MD / PDF 两路独立）
  * ------------------------------------------------------------------ */
 
 /* const 常量也照「真源码」来：从 app.js 里切出 `const NAME = ...;` 再 eval，

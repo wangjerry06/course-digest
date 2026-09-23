@@ -68,7 +68,7 @@ button:active { background: #e6e6e9; }
   z-index: 1;
 }
 
-/* ---------- 字号控件（F7：MD / PDF 两套独立语义）---------- */
+/* ---------- 字号控件（MD / PDF 两套独立语义）---------- */
 
 .font-controls { display: flex; align-items: center; gap: 10px; }
 .font-group { display: inline-flex; align-items: center; gap: 2px; }
@@ -104,7 +104,7 @@ button:active { background: #e6e6e9; }
 /* 左右分栏的分界线交给手柄来画，pane 自己不再画右边框（否则一条线会变两条） */
 #pdf-pane { background: #3a3a3c; }
 
-/* ---------- 分栏拖拽手柄（F8） ---------- */
+/* ---------- 分栏拖拽手柄 ---------- */
 
 .split-handle {
   position: relative;

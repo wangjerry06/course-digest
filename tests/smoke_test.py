@@ -18,6 +18,7 @@ from course_digest import extract  # noqa: E402
 from course_digest import paths, simplify  # noqa: E402
 from course_digest import publish  # noqa: E402
 from course_digest import serve  # noqa: E402
+from course_digest import __main__ as cli  # noqa: E402
 from course_digest.import_pdf import slugify  # noqa: E402
 from pypdf import PdfReader, PdfWriter  # noqa: E402
 
@@ -42,6 +43,29 @@ def quiet(fn, *a, **kw):
     """跑一个会往 stdout/stderr 打日志的函数，把噪音吞掉。"""
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
         return fn(*a, **kw)
+
+
+def cli_output(argv: list[str]):
+    """跑一次 CLI，返回 (退出码, stdout 文本)。
+
+    为什么不能只断言「抛了 SystemExit」：argparse 在 **用法错误**时同样抛
+    SystemExit，只是退出码是 2、usage 打去 stderr。只判异常类型的话，
+    「--help 可用」这类断言对失败形态也恒真 —— 等于没测。
+    """
+    out = io.StringIO()
+    code = None
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            cli.main(argv)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+    return code, out.getvalue()
+
+
+def help_ok(cmd: str) -> tuple[bool, int, str]:
+    """`<cmd> --help` 是否**正常退出**（code 0）并打出该子命令的 usage。"""
+    code, text = cli_output([cmd, "--help"])
+    return code == 0 and f"usage: course_digest {cmd}" in text, code, text
 
 
 def make_fixture_doc(root: Path, doc_id: str, groups: list[dict], n_pages: int):
@@ -349,8 +373,6 @@ def main():
     check("(d) split_by_guard == 0", r_mid["stats"]["split_by_guard"] == 0)
 
     # --- P3-FIX (a)：simplify 不再接受 --threshold ---
-    from course_digest import __main__ as cli  # noqa: E402
-
     # argparse 会把 usage 打到 stderr，这里吞掉以免污染测试输出
     with contextlib.redirect_stderr(io.StringIO()):
         threshold_rejected = raises(
@@ -785,10 +807,14 @@ def main():
             # --- 冻结契约：9 个子命令的 --help 仍全部可用 ---
             for _cmd in ("import", "extract", "simplify", "text", "publish",
                          "open", "list", "serve", "stop"):
-                with contextlib.redirect_stdout(io.StringIO()), \
-                        contextlib.redirect_stderr(io.StringIO()):
-                    _helped = raises(SystemExit, cli.main, [_cmd, "--help"])
-                check(f"--help 可用：{_cmd}", _helped)
+                _ok, _code, _text = help_ok(_cmd)
+                check(f"--help 可用：{_cmd}（退出码 0 + 打出 usage）", _ok)
+            # 反向对照：用法错误（缺必填参数）也必须能区分出来 ——
+            # 否则上面那条对「报错退出」也恒真，等于没测
+            _bad_code, _bad_text = cli_output(["import"])
+            _bad_pass = _bad_code == 0 and "usage: course_digest import" in _bad_text
+            check("--help 断言能区分用法错误（退出码 2 / usage 在 stderr）",
+                  _bad_code == 2 and not _bad_pass)
             _open_ns = cli.build_parser().parse_args(["open", "some-doc"])
             check("open: 位置参数名改为 target", hasattr(_open_ns, "target"))
 

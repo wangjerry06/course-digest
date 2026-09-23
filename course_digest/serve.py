@@ -13,7 +13,7 @@
     GET /static/<path>                           → web/<path>（兼容别名）
     GET /health                                  → {"ok": true}
     GET /api/docs                                → 文档列表
-    GET /api/doc/<id>                            → 数据契约 §三 的返回体
+    GET /api/doc/<id>                            → 前端约定的返回体（字段名见 doc_payload）
     GET /api/doc/<id>/pdf?version=full|simplified → PDF 文件
 
 安全（中 7）：docId 白名单 → 400；所有拼出来的路径 resolve() 后必须落在各自
@@ -88,7 +88,7 @@ class NotPublished(Exception):
 
 
 def doc_payload(doc_dir: Path) -> dict:
-    """拼 `GET /api/doc/<id>` 的返回体（§三：字段名严格一致）。"""
+    """拼 `GET /api/doc/<id>` 的返回体（字段名与前端 web/fixture/mock.json 严格一致）。"""
     doc_id = doc_dir.name
     missing = [
         name

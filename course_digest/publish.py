@@ -31,7 +31,7 @@ _COMMENT_RE = re.compile(r"<!--(.*?)-->", re.DOTALL)
 _BLANK_RE = re.compile(r"\n[ \t]*\n")
 _HR_RE = re.compile(r"^[-*_]{3,}$")
 
-# meta.json 的规范字段与顺序（§三）
+# meta.json 的规范字段与顺序（对外契约：改这里等于改前端读法）
 _META_FIELDS = ("id", "title", "created", "original_pages", "simplified_pages", "has_simplified")
 
 # 回程票 footer 的机器可读行（写 docId，**不写 URL**：URL 易腐，docId 稳定）
@@ -44,7 +44,7 @@ _COVERAGE_WARN = 50.0
 _PREVIEW_LEN = 30
 _UNANCHORED_MAX = 10
 
-# 标题截断长度（§三：取首个非空页的第一行）
+# 标题截断长度（取首个非空页的前两行）
 _TITLE_MAX = 80
 
 
@@ -233,7 +233,7 @@ def anchor_coverage(text: str) -> tuple[int, int, list[dict]]:
 
 
 # ----------------------------------------------------------------------
-# 三级回退（与前端 app.js 的 resolveAnchor 同一套规则，§三）
+# 三级回退（与前端 app.js 的 resolveAnchor 同一套规则）
 # ----------------------------------------------------------------------
 
 def resolve_fallback(first: int, page_map: dict) -> int | None:
@@ -271,7 +271,7 @@ def title_from_extract(extract: dict) -> str | None:
 
 
 def _write_meta(doc_dir: Path, doc_id: str, old: dict, page_map: dict, title: str | None):
-    """按 §三 的字段与顺序重写 meta.json；id / created 沿用旧值。"""
+    """按固定字段与顺序重写 meta.json；id / created 沿用旧值。"""
     new = {
         "id": old.get("id") or doc_id,
         "title": title or old.get("title") or doc_id,
