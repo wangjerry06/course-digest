@@ -428,6 +428,237 @@ const maxZoom = Number((SRC.match(/const MAX_ZOOM\s*=\s*([\d.]+)/) || [])[1]);
 check(`渲染上限: fit(${maxScale}) × 最大倍率(${maxZoom}) = 最终上限，且倍率与 PDF 档位最大值一致`,
   maxScale > 0 && maxZoom === PDF_FONT.levels[PDF_FONT.levels.length - 1]);
 
+/* ------------------------------------------------------------------ *
+ * PDF → MD 反向跳转（ADR-015）
+ *   findAnchorForPage 是纯函数（只吃 root.querySelectorAll + origPage）→ 按行为测；
+ *   接线部分（命中层、监听、aria、键盘）按 app.js 真源码做静态断言。
+ * ------------------------------------------------------------------ */
+
+const findAnchorForPage = load('findAnchorForPage', { parsePages });
+
+/* 虚拟 root：只需要 querySelectorAll 返回一个可遍历的「元素」列表 */
+const pagesRoot = (...specs) => ({
+  querySelectorAll: () => specs.map((p) => ({ dataset: { pages: p } })),
+});
+
+/* —— 正常路径 —— */
+const elSingle = { dataset: { pages: '2' } };
+const elMulti = { dataset: { pages: '5,6' } };
+const twoEls = { querySelectorAll: () => [elSingle, elMulti] };
+
+check('findAnchorForPage: 命中 → 返回该元素的引用',
+  findAnchorForPage(twoEls, 5) === elMulti);
+check('findAnchorForPage: 返回「第一个」匹配元素（不是第一个元素）',
+  findAnchorForPage(twoEls, 2) === elSingle);
+check('findAnchorForPage: 单页号命中', findAnchorForPage(pagesRoot('3'), 3) !== null);
+check('findAnchorForPage: 多页号里的首号命中', findAnchorForPage(pagesRoot('5,6'), 5) !== null);
+check('findAnchorForPage: 多页号里的次号命中', findAnchorForPage(pagesRoot('5,6'), 6) !== null);
+check('findAnchorForPage: 多页号乱序（9,5）也找得到 5',
+  findAnchorForPage(pagesRoot('9,5'), 5) !== null);
+check('findAnchorForPage: 页号带空白照样解析（" 5 , 6 "）',
+  findAnchorForPage(pagesRoot(' 5 , 6 '), 6) !== null);
+
+const threeEls = [{ dataset: { pages: '1' } }, { dataset: { pages: '2' } }, { dataset: { pages: '7' } }];
+check('findAnchorForPage: 目标在最后一个元素也返回它（不是 null）',
+  findAnchorForPage({ querySelectorAll: () => threeEls }, 7) === threeEls[2]);
+
+/* —— 边界 / 反向 —— */
+check('findAnchorForPage: 无匹配 → null', findAnchorForPage(pagesRoot('1', '2'), 9) === null);
+check('findAnchorForPage: 一个元素都没有 → null', findAnchorForPage(pagesRoot(), 1) === null);
+check('findAnchorForPage: dataset.pages 空串 → null',
+  findAnchorForPage(pagesRoot(''), 1) === null);
+check('findAnchorForPage: 垃圾字符（x,y）→ null，不抛',
+  findAnchorForPage(pagesRoot('x,y'), 1) === null);
+check('findAnchorForPage: 没有 dataset.pages → null',
+  findAnchorForPage({ querySelectorAll: () => [{ dataset: {} }] }, 1) === null);
+check('findAnchorForPage: 0 / 负数页号不会被匹配（0 不是合法页号）',
+  findAnchorForPage(pagesRoot('0,-3'), 0) === null
+  && findAnchorForPage(pagesRoot('0,-3'), -3) === null);
+/* 复算过：parseInt('5.5', 10) === 5（不是 NaN）——「5.5」按 5 处理，
+   与 parsePages 同一口径（这里刻意记录真实行为，不写想象中的 NaN）。 */
+check('findAnchorForPage: "5.5" 按 parseInt 取整成 5 命中，而 6 不命中',
+  findAnchorForPage(pagesRoot('5.5'), 5) !== null
+  && findAnchorForPage(pagesRoot('5.5'), 6) === null);
+
+/* 命中即返回、不再往下遍历（惰性迭代器：若多走一步就抛） */
+const lazyRoot = {
+  querySelectorAll: () => ({
+    [Symbol.iterator]() {
+      const list = ['1', '6,7', '9'];
+      let i = 0;
+      return {
+        next() {
+          if (i >= list.length) throw new Error('命中后不该继续遍历');
+          return { value: { dataset: { pages: list[i++] } }, done: false };
+        },
+      };
+    },
+  }),
+};
+check('findAnchorForPage: 命中立即返回，不再往下遍历',
+  findAnchorForPage(lazyRoot, 6).dataset.pages === '6,7');
+
+/* —— 页序号 → 原始页号（简化版走 page_map 反查，完整版直通） —— */
+
+const SIMP_MAP = {
+  total_original: 6,
+  orig_to_simp: { '1': 1, '2': null, '3': 2, '4': null, '5': null, '6': 3 },
+  simp_to_orig: { '1': 1, '2': 3, '3': 6 },
+};
+const origOfSimplified = load('origForIndex', {
+  state: { version: 'simplified', data: { page_map: SIMP_MAP } },
+});
+const origOfFull = load('origForIndex', {
+  state: {
+    version: 'full',
+    data: { page_map: { total_original: 285, orig_to_simp: {}, simp_to_orig: {} } },
+  },
+});
+const origMissing = load('origForIndex', {
+  state: { version: 'simplified', data: { page_map: { simp_to_orig: { '2': null } } } },
+});
+
+check('origForIndex 简化版: 页序 1 → 原 P1', origOfSimplified(1) === 1);
+check('origForIndex 简化版: 页序 2 → 原 P3（中间被删的页跳过去）', origOfSimplified(2) === 3);
+check('origForIndex 简化版: 页序 3 → 原 P6', origOfSimplified(3) === 6);
+check('origForIndex 简化版: 映射缺条目 → null（不崩）', origOfSimplified(9) === null);
+check('origForIndex 简化版: 页序 0 → null', origOfSimplified(0) === null);
+check('origForIndex 简化版: 映射值是 null → null（不把 null 当页号）', origMissing(2) === null);
+check('origForIndex 完整版: 页序号就是原始页号（不查 page_map）', origOfFull(7) === 7);
+check('origForIndex 完整版: page_map 全空也不受影响（路径独立）', origOfFull(285) === 285);
+
+/* —— 接线静态断言：函数写得再对，没接上也是白写 —— */
+
+const layoutPagesSrc = extract('layoutPages');
+check('app.js: layoutPages() 给每一页挂了反向跳转',
+  /attachPageHit\(el,\s*i\s*\+\s*1\)/.test(layoutPagesSrc));
+
+const attachSrc = extract('attachPageHit');
+check('app.js: 命中层是 .cd-page-hit，且挂在页容器上',
+  /className = 'cd-page-hit'/.test(attachSrc) && /el\.appendChild\(hit\)/.test(attachSrc));
+check('app.js: 点命中层 → 页序换成原始页号 → jumpToMarkdown',
+  /hit\.addEventListener\('click'/.test(attachSrc)
+  && /origForIndex\(index\)/.test(attachSrc)
+  && /jumpToMarkdown\(page\)/.test(attachSrc));
+check('app.js: 页容器带 role=button / tabindex / aria-label「点击跳到第 N 页对应总结」',
+  /setAttribute\('role', 'button'\)/.test(attachSrc)
+  && /setAttribute\('tabindex', '0'\)/.test(attachSrc)
+  && /点击跳到第 \$\{label\} 页对应总结/.test(attachSrc));
+check('app.js: 键盘 Enter / Space 与点击同效（并拦掉 Space 的滚动）',
+  /ev\.key !== 'Enter'/.test(attachSrc) && /ev\.key !== ' '/.test(attachSrc)
+  && /ev\.preventDefault\(\)/.test(attachSrc) && /hit\.click\(\)/.test(attachSrc));
+
+const jumpSrc = extract('jumpToMarkdown');
+check('app.js: jumpToMarkdown 复用 findAnchorForPage 在总结 DOM 里查',
+  /findAnchorForPage\(\$\('#md'\), origPage\)/.test(jumpSrc));
+check('app.js: 命中 → 平滑滚动 + 复用既有高亮 + 状态条',
+  /scrollIntoView\(\{ block: 'center', behavior: 'smooth' \}\)/.test(jumpSrc)
+  && /highlightMd\(el\)/.test(jumpSrc)
+  && /setMdStatus\(/.test(jumpSrc));
+check('app.js: 未命中 → 只轻提示 + 返回 false（不抛、不弹窗）',
+  /if \(!el\)[\s\S]*?setMdStatus\(`第 \$\{origPage\} 页未在总结中出现`\)[\s\S]*?return false;/
+    .test(jumpSrc));
+
+const mdStatusSrc = extract('setMdStatus');
+check('app.js: MD 反馈 1.5 秒后自动消失（并清掉上一次的定时器）',
+  /clearTimeout\(setMdStatus\._t\)/.test(mdStatusSrc) && /1500\)/.test(mdStatusSrc));
+check('app.js: PDF 正在报错（带重试）时，状态条不被 MD 反馈抢占',
+  /if \(!el \|\| statusRetry\) return;/.test(mdStatusSrc));
+
+/* —— 命中层样式 —— */
+
+const hitRule = (CSS.match(/\.cd-page-hit\s*\{[^}]*\}/) || [''])[0];
+check('style.css: 有 .cd-page-hit 命中层规则', hitRule.length > 0);
+check('style.css: 命中层绝对定位并盖满整页（inset: 0）',
+  /position:\s*absolute/.test(hitRule) && /inset:\s*0/.test(hitRule));
+check('style.css: 命中层在 canvas 之上（z-index: 1）', /z-index:\s*1/.test(hitRule));
+check('style.css: 命中层能吃点击（pointer-events: auto）',
+  /pointer-events:\s*auto/.test(hitRule));
+check('style.css: 命中层背景透明（不挡 PDF 渲染）', /background:\s*transparent/.test(hitRule));
+check('style.css: 命中层 cursor: pointer', /cursor:\s*pointer/.test(hitRule));
+check('style.css: hover 时给浅色内框提示（不打扰阅读）',
+  /\.cd-page-hit:hover\s*\{[^}]*outline:\s*2px solid rgba\(0,\s*122,\s*255,\s*\.25\)/.test(CSS));
+
+/* —— 命中层的**行为**测试：用最小假 DOM 把 attachPageHit 真跑一遍 ——
+   静态正则只能证明「代码里写了 addEventListener」，证明不了「点下去真的跳」。
+   这里用真函数源码 + 假 document，把「挂层 / aria / 点击 / 键盘 / 映射缺失」都走一遍。 */
+
+function fakeEl() {
+  return {
+    attrs: {},
+    children: [],
+    listeners: {},
+    className: '',
+    setAttribute(k, v) { this.attrs[k] = v; },
+    appendChild(c) { this.children.push(c); return c; },
+    addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); },
+    fire(type, ev) { (this.listeners[type] || []).forEach((fn) => fn(ev)); },
+    click() { this.fire('click', {}); },
+  };
+}
+const fakeDocument = { createElement: () => fakeEl() };
+
+/* 简化版口径：页序 2 → 原 P3（中间的页被删了） */
+const jumped = [];
+const attachHit = load('attachPageHit', {
+  document: fakeDocument,
+  origForIndex: (i) => (i === 2 ? 3 : i),
+  jumpToMarkdown: (p) => { jumped.push(p); return true; },
+});
+
+const pageEl = fakeEl();
+attachHit(pageEl, 2);
+check('attachPageHit: 挂出一个 .cd-page-hit 命中层（且只挂一个）',
+  pageEl.children.length === 1 && pageEl.children[0].className === 'cd-page-hit');
+check('attachPageHit: 页容器带 role=button / tabindex=0',
+  pageEl.attrs.role === 'button' && pageEl.attrs.tabindex === '0');
+check('attachPageHit: aria-label 用**原始页号**（页序 2 → 原 P3）',
+  pageEl.attrs['aria-label'] === '点击跳到第 3 页对应总结');
+
+pageEl.children[0].fire('click', {});
+check('attachPageHit: 点命中层 → jumpToMarkdown(原 P3)',
+  jumped.length === 1 && jumped[0] === 3);
+
+let prevented = 0;
+const keyEv = (key) => ({ key, preventDefault() { prevented += 1; } });
+const beforeKeys = jumped.length;
+pageEl.fire('keydown', keyEv('a'));            // 无关键不该动
+check('attachPageHit: 无关按键不触发跳转',
+  jumped.length === beforeKeys && prevented === 0);
+pageEl.fire('keydown', keyEv('Enter'));
+pageEl.fire('keydown', keyEv(' '));
+check('attachPageHit: Enter / Space 各触发一次跳转',
+  jumped.length === beforeKeys + 2);
+check('attachPageHit: Enter / Space 会拦掉默认行为（Space 不滚页）',
+  prevented === 2);
+
+/* 映射缺失的边界：不跳、不抛，且 aria-label 退回页序号 */
+const jumpedMissing = [];
+const noMapping = load('attachPageHit', {
+  document: fakeDocument,
+  origForIndex: () => null,
+  jumpToMarkdown: (p) => { jumpedMissing.push(p); return true; },
+});
+const orphanEl = fakeEl();
+noMapping(orphanEl, 2);
+orphanEl.children[0].fire('click', {});
+orphanEl.fire('keydown', keyEv('Enter'));
+check('attachPageHit: 原始页号映射缺失 → 点/键盘都不跳、不抛',
+  jumpedMissing.length === 0);
+check('attachPageHit: 映射缺失时 aria-label 退回页序号（页面仍可访问）',
+  orphanEl.attrs['aria-label'] === '点击跳到第 2 页对应总结');
+
+/* —— 回归：MD → PDF 的单向跳转不能被碰坏 —— */
+
+const onMdClickSrc = extract('onMdClick');
+check('回归: onMdClick 仍走 resolveAnchor + scrollToPage(flash)（MD → PDF 没坏）',
+  /resolveAnchor\(pages\)/.test(onMdClickSrc)
+  && /scrollToPage\(idx,\s*\{\s*flash:\s*true\s*\}\)/.test(onMdClickSrc));
+check('回归: #md 的点击监听仍指向 onMdClick',
+  /#md'\)\.addEventListener\('click',\s*onMdClick\)/.test(SRC));
+check('回归: data-pages 的生成方式没变（attachAnchors 原样）',
+  /target\.dataset\.pages = pages\.join\(','\)/.test(SRC));
+
 if (failed) {
   console.error(`\n${failed} 条失败`);
   process.exit(1);

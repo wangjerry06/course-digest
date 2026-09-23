@@ -165,6 +165,28 @@ button:active { background: #e6e6e9; }
   height: 100%;
 }
 
+/* PDF → MD 反向跳转的命中层（ADR-015）：透明盖在 canvas 之上，点页即跳到总结。
+   必须盖在最上层（z-index 高于 canvas 与 pdf.js 的 .textLayer）才拿得到
+   cursor:pointer 与 hover 反馈；盖在下面的话点击会被文本层吃掉，只剩空白处能点。
+   代价：PDF 文字的拖选会被它挡住（textLayer 的 user-select 够不到指针）——
+   两者不能兼得，要保选字就得把监听挪到 .cd-page 上、放弃文字上的 pointer 光标。 */
+.cd-page-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* hover 提示：浅色内框，不遮内容、不打扰阅读（触摸设备无 hover，落不到这里也无妨） */
+.cd-page-hit:hover {
+  outline: 2px solid rgba(0, 122, 255, .25);
+  outline-offset: -2px;
+}
+
 /* 未渲染时的占位：显示页码，避免大片空白看着像坏了 */
 .cd-page .page-placeholder {
   position: absolute;

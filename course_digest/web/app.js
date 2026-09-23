@@ -175,6 +175,18 @@ function resolveAnchor(pages) {
   return { orig: null, rule: 3 };
 }
 
+/* resolveAnchor 的反向（ADR-015）：**原始页号 → MD 里第一个标注了它的元素**。
+ * 那边是「总结的锚点找落页」，这边是「PDF 的页找总结段」，两者共用同一套页号口径
+ * （都是原始 PDF 页码），所以 PDF 与总结能互指。
+ * 写成 function 声明、只依赖 root.querySelectorAll，是为了能被 node 直接抽出来测
+ * （tests/frontend_test.js）——与 parsePages / resolveAnchor 同样的处理方式。 */
+function findAnchorForPage(root, origPage) {
+  for (const el of root.querySelectorAll('[data-pages]')) {
+    if (parsePages(el).includes(origPage)) return el;
+  }
+  return null;
+}
+
 /* 原始页号 → 当前版本里的页序号（简化版可能没有这一页） */
 function pageIndexForVersion(orig) {
   const pm = state.data.page_map;
@@ -400,6 +412,7 @@ function layoutPages() {
     el.style.height = `${Math.round(s.h * scale)}px`;
     el.style.setProperty('--scale-factor', String(scale));
     el.appendChild(placeholderFor(i + 1));
+    attachPageHit(el, i + 1);       // ADR-015：这一页可点 → 跳总结
     frag.appendChild(el);
     state.pages.push(el);
   });
@@ -571,6 +584,70 @@ function onMdClick(ev) {
   const idx = pageIndexForVersion(orig);
   if (idx == null) return;
   scrollToPage(idx, { flash: true });
+}
+
+/* ------------------------------------------------------------------ *
+ * PDF → MD 反向跳转（ADR-015：联动从单向升为双向）
+ * ------------------------------------------------------------------ */
+
+/* 借 PDF 的状态条做 MD 侧反馈（不另起一条，避免本版扩面）。
+ * 1.5 秒后自动消失；PDF 正在报错（状态条带「点这里重试」）时让位 ——
+ * 那条比「已跳到第 N 页」重要得多，不能被 1.5 秒的提示顶掉。 */
+function setMdStatus(text) {
+  const el = $('#pdf-status');
+  if (!el || statusRetry) return;
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(setMdStatus._t);
+  setMdStatus._t = setTimeout(() => {
+    el.textContent = '';
+    el.hidden = true;
+  }, 1500);
+}
+
+/* 点 PDF 的某一原始页 → 滚 MD 到标注此页的第一段 + 高亮（复用 MD → PDF 那套视觉反馈）。
+ * 找不到就轻提示，**不报错、不弹窗**（设计冻结：查不到段是正常情况，
+ * 简化版里很多页本来就没被总结引用）。返回是否命中，便于测试与调用方判断。 */
+function jumpToMarkdown(origPage) {
+  const el = findAnchorForPage($('#md'), origPage);
+  if (!el) {
+    setMdStatus(`第 ${origPage} 页未在总结中出现`);
+    return false;
+  }
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  highlightMd(el);
+  setMdStatus(`已跳到第 ${origPage} 页对应总结`);
+  return true;
+}
+
+/* 给一页装上反向跳转。index 是**当前版本里的页序号**（1 起，与 dataset.page 同源）：
+ *   完整版 → 页序号就是原始页号；简化版 → 经 page_map.simp_to_orig 反查（复用 origForIndex）。
+ * 命中层是必须的：它盖在 canvas 之上才能同时拿到 cursor:pointer 与 hover 反馈，
+ * 也能让没渲染出 canvas 的占位页照样可点。 */
+function attachPageHit(el, index) {
+  const orig = origForIndex(index);
+  /* aria-label 用**原始页号**（与总结锚点、状态条同一套编号）：
+     完整版下两者相等；简化版下页序 2 可能对应原 P7，用户要跳的正是「原 P7 的总结」。 */
+  const label = orig == null ? index : orig;
+  el.setAttribute('role', 'button');
+  el.setAttribute('tabindex', '0');
+  el.setAttribute('aria-label', `点击跳到第 ${label} 页对应总结`);
+
+  const hit = document.createElement('div');
+  hit.className = 'cd-page-hit';
+  hit.addEventListener('click', () => {
+    const page = origForIndex(index);
+    if (page == null) return;          // 该页没有对应的原始页号（映射缺失），静默不动
+    jumpToMarkdown(page);
+  });
+  el.appendChild(hit);
+
+  // 键盘可达：Tab 聚焦到页容器后 Enter / Space 与点击同效
+  el.addEventListener('keydown', (ev) => {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    ev.preventDefault();               // Space 默认会滚动页面，拦掉
+    hit.click();
+  });
 }
 
 /* ------------------------------------------------------------------ *
