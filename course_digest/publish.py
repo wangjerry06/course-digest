@@ -9,10 +9,14 @@ meta.json 的**唯一最终写入者**是 publish：import 只写初版，之后
 simplified_pages / has_simplified / title；id 与 created 保持 import 时的值不变
 （created 是「创建时间」，不随 publish 刷新）。
 
-summary.md 的**唯一最终写入者**同样是 publish：落盘时在正文尾部追加回程票 footer
+summary.md 的口径同样收敛在这里：落盘时在正文尾部追加回程票 footer
 （只写 docId 不写 URL —— 端口会变、pid 会换，docId 稳定；供 `open <md路径>` 恢复
 页面）。footer 的格式与读写见 `footer.py`。读入先 strip 再写，重复 publish 不叠加；
 校验与覆盖率统计一律在剥离后的正文上做。
+
+编辑器保存（`POST /api/doc/<id>/summary`，见 serve.py）不另起一套写法，而是复用
+下面的 `_write_summary_md` —— 「唯一最终写入者」升级为「唯一写入函数」：口径只有
+一份，谁写都幂等。
 """
 
 import json
@@ -235,6 +239,29 @@ def _write_meta(doc_dir: Path, doc_id: str, old: dict, page_map: dict, title: st
 
 
 # ----------------------------------------------------------------------
+# summary.md 落盘（publish 与编辑器保存共用同一处口径）
+# ----------------------------------------------------------------------
+
+def _write_summary_md(doc_dir: Path, body: str, doc_id: str) -> None:
+    """把规范形正文 + 回程票 footer 原子地写到 docs/<doc_id>/summary.md。
+
+    publish 与编辑器保存（`POST /api/doc/<id>/summary`）共用的**唯一写入口径**：
+    - publish：body = strip_footer(读入) + 锚点校验通过
+    - editor ：body = strip_footer(请求体) + 锚点校验通过
+
+    调用方必须传**已经剥过 footer 的规范形正文** —— footer 由这里按 doc_id 统一重建，
+    所以「同一个 docId 反复写」天然幂等（不叠加、不漂）。写入走 tmp → rename
+    原子替换（红线 4）：半途中断也不会留下半截 summary.md。
+
+    **只碰 summary.md**：PDF / page-map / extract / meta 是 publish 的事，这里不伸手。
+    """
+    dest = (doc_dir / "summary.md").resolve()
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    tmp.write_text(body + build_footer(doc_id), encoding="utf-8")
+    tmp.replace(dest)
+
+
+# ----------------------------------------------------------------------
 # publish
 # ----------------------------------------------------------------------
 
@@ -325,9 +352,8 @@ def run(args) -> int:
 
     # 5) summary.md 落盘：正文 + 回程票 footer（docId 的真相源是命令行参数，
     #    不信任旧 footer 里写的值）；footer 不回流到 agent 输入的临时 md
-    dest = (doc_dir / "summary.md").resolve()
-    dest.write_text(body + build_footer(args.doc_id), encoding="utf-8")
-    print(f"summary.md -> {dest}", file=sys.stderr)
+    _write_summary_md(doc_dir, body, args.doc_id)
+    print(f"summary.md -> {(doc_dir / 'summary.md').resolve()}", file=sys.stderr)
 
     # 6) meta.json 补全（publish 是唯一最终写入者）
     title = title_from_extract(extract)
