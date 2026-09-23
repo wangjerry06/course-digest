@@ -35,6 +35,19 @@
 其余命令、产物、回程票格式两个平台完全一致；CLI 输出统一 UTF-8，
 agent 解析不受 Windows 控制台代码页影响。
 
+### 首次使用：先确认有 Python
+
+Windows **不自带 Python**——裸机敲 `python` 会弹 Microsoft Store，那是系统的"应用执行别名"
+假命令，不是 Python。装一次即可（之后的依赖全部 vendor 在仓库里，不用 pip）：
+
+- 图形路线：[python.org](https://www.python.org/downloads/) 下载安装包，
+  **勾选 "Add python.exe to PATH"**（默认不勾，最容易漏的一步）
+- 命令路线：`winget install Python.Python.3.13`
+- 装完**重开终端**，`python --version` 出现 `Python 3.`（3.10+ 均可）即就绪
+
+macOS 同理不自带 python3（12.3 起）：首次敲命令弹"安装开发者工具"确认即可，
+或 `xcode-select --install`。
+
 ## 安装
 
 ```bash

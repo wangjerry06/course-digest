@@ -34,6 +34,14 @@ v0.1.x 的代码底子（pathlib、`Path.home()`、`webbrowser`、子进程 deta
   零依赖原则不破（`references/visual-patch.md` 已标注边界）。
 - Linux 未测：路径与 macOS 同源，理论可用，但不承诺。
 
+### 环境自检（SKILL.md 新增）
+
+两平台（尤其 Windows）都**不自带 Python**，而本 skill 的检测逻辑没法用 Python 自己写
+（没有 Python 时代码跑不起来）—— 所以落点是给 agent 的自检指令：
+首次使用先跑 `python3 --version`（Windows：`python`/`py`），识别三种失败形态
+（Windows 的 Store 假命令、macOS 缺 python3、版本 < 3.10），
+**引导用户安装而不擅自代装**；`README.md` 同步补了「首次使用装 Python」三步说明。
+
 ### 不变的事
 
 - CLI 命令、stdout/stderr 契约、产物格式（summary.md / page-map.json / meta.json / simplified.pdf）

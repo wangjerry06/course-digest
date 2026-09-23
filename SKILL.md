@@ -30,6 +30,28 @@ description: 课件总结：把 PDF 课件压成带页锚点的 Markdown 总结�
     图密集型课件按纯文本层写总结，并在总结里注明「未做视觉补丁，图内细节请核对原文」
   - CLI 的 stdout/stderr 已强制 UTF-8，agent 直接解析即可，不用管控制台代码页
 
+## 环境自检（首次使用必做；之后仅在命令失败时复查）
+
+本 skill 一切命令都靠 Python 3.10+，先确认它在：
+
+```bash
+python3 --version        # Windows：python --version 或 py --version
+```
+
+判定与处理（**引导用户安装，不要擅自替用户装软件**）：
+
+- 输出 `Python 3.x`（x ≥ 10）→ 通过，继续往下
+- **Windows**：裸机**不自带 Python**，且系统自带一个"应用执行别名"假 `python.exe` ——
+  敲 `python` 会弹 Microsoft Store 或提示 "Python was not found"，
+  **那不是装好的 Python**。引导用户二选一：
+  - python.org 下载安装包，**务必勾 "Add python.exe to PATH"**（默认不勾，最容易漏）
+  - 或有 winget 的话：`winget install Python.Python.3.13`
+  - 装完让用户**重开终端**再验一次（PATH 要重开才刷新）
+- **macOS**：没有 `python3` → 引导装 Xcode Command Line Tools（`xcode-select --install`，
+  装完自带 python3）或 python.org 安装包
+- 版本 < 3.10 → 提示升级（`str | None` 注解需要 3.10 才能运行时求值）
+- 用户装好后：重跑自检确认 `Python 3.x` 出现，再进入四步执行链
+
 ## 四步执行链
 
 ### 0. 先读用户偏好（**强制项，不可跳过**）
