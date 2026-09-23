@@ -1,4 +1,4 @@
-"""M1 压缩算法的纯逻辑冒烟测试（plain python，无 pytest 依赖）。
+"""course-digest 的纯逻辑冒烟测试（plain python，无 pytest 依赖）。
 
 运行：cd <repo root> && python3 tests/smoke_test.py
 """
@@ -587,7 +587,7 @@ def main():
     _long = publish.title_from_extract({"pages": [{"text": "A" * 90 + "\n" + "B" * 90}]})
     check("title: 截断到 80 字符", _long is not None and len(_long) <= 80)
 
-    # --- M6：text 渲染（只输出保留页 + 页码标记）---
+    # --- text 渲染（只输出保留页 + 页码标记）---
     r_text = compress.build_extract(Path("dummy.pdf"), ["A" * 60 + "\nB", "A" * 60 + "\nB\nC", "独立页"], 0.85)
     rendered = extract.render_text(r_text)
     check("text: 被合并的页不出现在正文里", "===== P1 =====" not in rendered)
@@ -653,7 +653,7 @@ def main():
     check("footer 幂等: 不叠加（注释只出现一次）", _once.count("course-digest: docId=") == 1)
     check("footer 幂等: 正文没被改动", publish.strip_footer(_once) == _BODY)
 
-    # --- coverage：三元组 + 未锚定段落的行号与预览（§3）---
+    # --- coverage：三元组 + 未锚定段落的行号与预览 ---
     _long = "这是一段很长的没有锚点的正文内容" * 3
     _cov = (
         "<!-- pages: 1 -->\n\n"

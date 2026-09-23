@@ -12,7 +12,7 @@
 1. 每个 group 只保留 kept_page
 2. 不在任何 group 的页全部保留
 3. is_progressive_dup=true 的页删除，reason="dup"
-4. --drop 指定的页额外删除，reason="manual"（agent 判定的无关页，F1）
+4. --drop 指定的页额外删除，reason="manual"（agent 判定的无关页）
 
 一页同时命中 3 和 4 时记 "dup"：算法判定在先，而 "manual" 要严格等于「算法本会保留、
 只因 agent 判定而删掉」的页，这样前端的两种文案才不会互相矛盾。

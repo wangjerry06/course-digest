@@ -11,8 +11,8 @@ simplified_pages / has_simplified / title；id 与 created 保持 import 时的�
 
 summary.md 的**唯一最终写入者**同样是 publish：落盘时在正文尾部追加回程票 footer
 （只写 docId 不写 URL —— 端口会变、pid 会换，docId 稳定；供 `open <md路径>` 恢复
-页面）。读入先 strip 再写，重复 publish 不叠加；校验与覆盖率统计一律在剥离后的
-正文上做。
+页面）。footer 的格式与读写见 `footer.py`。读入先 strip 再写，重复 publish 不叠加；
+校验与覆盖率统计一律在剥离后的正文上做。
 """
 
 import json
@@ -23,6 +23,8 @@ from pathlib import Path
 from . import paths
 from . import serve
 from . import simplify
+# 回程票 footer 三件套：格式与读写搬到独立模块（serve 出口补票也要用，见 footer.py）
+from .footer import build_footer, parse_footer_doc_id, strip_footer
 
 # <!-- pages: 5,6 -->：内容必须只有 "pages:" 加一串数字
 _ANCHOR_RE = re.compile(r"^\s*pages\s*:\s*(\d+(?:\s*,\s*\d+)*)\s*$")
@@ -33,9 +35,6 @@ _HR_RE = re.compile(r"^[-*_]{3,}$")
 
 # meta.json 的规范字段与顺序（对外契约：改这里等于改前端读法）
 _META_FIELDS = ("id", "title", "created", "original_pages", "simplified_pages", "has_simplified")
-
-# 回程票 footer 的机器可读行（写 docId，**不写 URL**：URL 易腐，docId 稳定）
-_FOOTER_ANCHOR_RE = re.compile(r"<!--\s*course-digest:\s*docId=([^\s\n]+)[^>]*-->")
 
 # 覆盖率低于这个值就额外告警
 _COVERAGE_WARN = 50.0
@@ -54,63 +53,7 @@ def _fail(message: str) -> int:
 
 
 # ----------------------------------------------------------------------
-# 回程票 footer（写 docId 不写 URL）
-#
-# 下载 summary.md 到本地后，用户要能用一条命令重开并排页面。md 里只写
-# **docId**、不写 URL —— 端口/pid 是易腐的，docId 稳定（ADR-014）。
-#
-# 三个纯函数不碰 IO，可全量单测；格式常量只在 build_footer 里定义一次。
-# ----------------------------------------------------------------------
-
-def _iter_footer_matches(text: str):
-    return _FOOTER_ANCHOR_RE.finditer(text)
-
-
-def parse_footer_doc_id(text: str) -> str | None:
-    """取**最后一个**回程票注释里的 docId；没有则 None。
-
-    取最后一个：正文里万一出现同形态的注释（概率≈0），真正生效的仍是尾部的票。
-    """
-    found = None
-    for m in _iter_footer_matches(text):
-        found = m
-    return found.group(1) if found else None
-
-
-def strip_footer(text: str) -> str:
-    """剥掉尾部回程票，返回**规范形正文**：尾部空白规范化、以单个 \\n 结尾。
-
-    规范形是幂等的前提。落盘口径是「规范形 + build_footer」，若剥离后正文的
-    尾部形态随是否带 footer 而变（无票时原文可能没有尾换行，带票时有多余空行），
-    两次 publish 的字节就会漂，「连发两次指纹不变」直接失败。
-    """
-    last = None
-    for m in _iter_footer_matches(text):
-        last = m
-    body = text[: last.start()] if last else text
-    body = body.rstrip()
-    return body + "\n" if body else ""
-
-
-def build_footer(doc_id: str) -> str:
-    """拼回程票 footer。格式常量只在这一处定义，改格式改这里。
-
-    两段：① HTML 注释（机器可读、渲染不可见，`key=value` 便于将来加字段）
-         ② `---` + `<sub>` 人读段（下载后翻到底就知道怎么重开）
-    人读段如实注明依赖本机仓库 + 数据目录 —— md 拷到别的机器就恢复不了页面，
-    此时 md 本身仍是完整总结。诚实比万能重要。
-    """
-    return (
-        f"\n<!-- course-digest: docId={doc_id} -->\n"
-        "\n---\n"
-        f"<sub>📄 由 course-digest 生成 · docId `{doc_id}` ·\n"
-        "重新打开页面：`python3 -m course_digest open 本md文件路径`"
-        "（需本机仓库与 ~/.course-digest 数据）</sub>\n"
-    )
-
-
-# ----------------------------------------------------------------------
-# 锚点校验（低 3）
+# 锚点校验
 # ----------------------------------------------------------------------
 
 def _leading_anchor(block: str):

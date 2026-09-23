@@ -1,6 +1,6 @@
 # fixture — 前端 mock 模式的数据
 
-`?mock=1` 时前端只读这里的 `mock.json`，不发任何 `/api` 请求（M4 的服务还没写出来时，
+`?mock=1` 时前端只读这里的 `mock.json`，不发任何 `/api` 请求（服务还没起来时，
 也能用 `python3 -m http.server` 单独自测前端）。
 
 ## 两个 PDF 不入仓库（第三方版权）

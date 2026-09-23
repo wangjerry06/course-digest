@@ -13,10 +13,17 @@
     GET /static/<path>                           → web/<path>（兼容别名）
     GET /health                                  → {"ok": true}
     GET /api/docs                                → 文档列表
-    GET /api/doc/<id>                            → 前端约定的返回体（字段名见 doc_payload）
+    GET /api/doc/<id>                            → 前端约定的返回体（字段名见 doc_payload）；
+                                                   其中 summary_md **恒为「正文 + 恰好一张回程票」**
     GET /api/doc/<id>/pdf?version=full|simplified → PDF 文件
 
-安全（中 7）：docId 白名单 → 400；所有拼出来的路径 resolve() 后必须落在各自
+回程票（footer）只在 `publish` 时写入磁盘，而 `open` 不重新生成任何东西 —— 于是
+v0.1.1 之前 publish 的**存量文档**磁盘上没有票，前端「下载 MD」拿到的东西没票，
+`open <md路径>` 重开页面这条功能对它们全部失效。修法是在这个出口统一补票：读到的
+summary 一律走 `strip_footer + build_footer`。**只读不写** —— 用户数据只能由 publish
+写；对已 publish 过的文档，磁盘本就是「正文 + 票」，再套一次逐字节等价（幂等）。
+
+安全：docId 白名单 → 400；所有拼出来的路径 resolve() 后必须落在各自
 前缀内 → 403；不发 CORS 头；只处理 GET。
 """
 
@@ -34,6 +41,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import paths
+from .footer import build_footer, strip_footer
 
 HOST = "127.0.0.1"
 PORT_START = 7317
@@ -88,7 +96,13 @@ class NotPublished(Exception):
 
 
 def doc_payload(doc_dir: Path) -> dict:
-    """拼 `GET /api/doc/<id>` 的返回体（字段名与前端 web/fixture/mock.json 严格一致）。"""
+    """拼 `GET /api/doc/<id>` 的返回体（字段名与前端 web/fixture/mock.json 严格一致）。
+
+    契约：返回的 `summary_md` **恒为「规范形正文 + 恰好一张回程票」** —— 出口统一
+    补票，存量文档（磁盘上没票）也能拿到带票的下载件。这里**只读不写**：用户数据
+    只能由 publish 写。对已被 publish 过的文档，磁盘内容就是
+    `strip_footer(x) + build_footer(docId)`，再套一次同样的变换结果逐字节不变（幂等）。
+    """
     doc_id = doc_dir.name
     missing = [
         name
@@ -99,7 +113,8 @@ def doc_payload(doc_dir: Path) -> dict:
         raise NotPublished(missing)
 
     meta = _read_json(doc_dir / "meta.json") or {"id": doc_id}
-    summary = (doc_dir / "summary.md").read_text(encoding="utf-8")
+    raw = (doc_dir / "summary.md").read_text(encoding="utf-8")
+    summary = strip_footer(raw) + build_footer(doc_id)
     page_map = _read_json(doc_dir / "page-map.json")
 
     return {
@@ -259,7 +274,7 @@ class Handler(BaseHTTPRequestHandler):
         if not target.is_file():
             return self._error(404, f"{names[version]} not found")
 
-        # 取舍（V6）：不做 206 —— 不发 Accept-Ranges，让 PDF.js 整份下载。
+        # 取舍：不做 206 —— 不发 Accept-Ranges，让 PDF.js 整份下载。
         # 半吊子的字节范围比没有更糟；全量 200 一定是对的。
         data = target.read_bytes()
         self._send(200, data, "application/pdf", {"Cache-Control": "no-store"})

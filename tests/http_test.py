@@ -13,6 +13,7 @@
 运行：cd <repo root> && python3 tests/http_test.py
 """
 
+import hashlib
 import json
 import re
 import sys
@@ -25,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from course_digest import paths, serve  # noqa: E402
+from course_digest import footer, paths, publish, serve  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / "course_digest" / "web"
@@ -65,7 +66,17 @@ def fetch_headers(base, path):
     return status, {k.lower(): v for k, v in headers.items()}
 
 
-def make_doc(docs_dir: Path, doc_id: str) -> None:
+# 一份「v0.1.1 之前 publish 出来」的老文档正文：尾部**没有**回程票
+LEGACY_SUMMARY = "<!-- pages: 1 -->\n老文档正文\n\n<!-- pages: 2 -->\n第二段正文\n"
+
+
+def make_doc(docs_dir: Path, doc_id: str, summary: str | None = None) -> Path:
+    """造一个「已 publish 过」的文档目录。
+
+    summary 传 None 时用**真实落盘口径** `strip_footer(正文) + build_footer(docId)` 写盘
+    —— 这样磁盘上的文件就是 v0.1.1 publish 的真实产物，而不是手写的近似 footer。
+    传显式 summary 时用来模拟磁盘上的任意形态（例如存量老文档：没有票）。
+    """
     d = docs_dir / doc_id
     d.mkdir(parents=True)
     (d / "meta.json").write_text(
@@ -82,12 +93,9 @@ def make_doc(docs_dir: Path, doc_id: str) -> None:
         ),
         encoding="utf-8",
     )
-    (d / "summary.md").write_text(
-        "<!-- pages: 1 -->\n内容\n\n"
-        f"<!-- course-digest: docId={doc_id} -->\n"
-        "\n---\n<sub>📄 由 course-digest 生成</sub>\n",
-        encoding="utf-8",
-    )
+    if summary is None:
+        summary = footer.strip_footer("<!-- pages: 1 -->\n内容\n\n") + footer.build_footer(doc_id)
+    (d / "summary.md").write_text(summary, encoding="utf-8")
     (d / "page-map.json").write_text(
         json.dumps(
             {
@@ -104,6 +112,7 @@ def make_doc(docs_dir: Path, doc_id: str) -> None:
     )
     (d / "source.pdf").write_bytes(b"%PDF-1.4\n")
     (d / "simplified.pdf").write_bytes(b"%PDF-1.4\n")
+    return d
 
 
 # ----------------------------------------------------------------------
@@ -152,12 +161,61 @@ def check_pdf_download_route(base: str, doc_id: str):
     check("未知 version → 400",
           fetch(base, f"/api/doc/{doc_id}/pdf?version=weird")[0] == 400)
 
-    # 回程票 footer 落盘后，服务必须**原样透传**（前端只渲染，不解析也不该丢）
+    # 已 publish 的文档（磁盘 = 规范形正文 + 一张票）经服务出口后必须**逐字节不变**
+    # （出口也会跑一遍 strip+build，但对已成规范形的文件是幂等的）
     _, _, payload = fetch(base, f"/api/doc/{doc_id}")
     served = json.loads(payload)["summary_md"]
     on_disk = (paths.DOCS_DIR / doc_id / "summary.md").read_text(encoding="utf-8")
     check("summary_md 与磁盘逐字节一致（含回程票 footer）", served == on_disk)
     check("透传内容里带着回程票", "course-digest: docId=" in served)
+
+
+def check_summary_footer_outlet(base: str, real_id: str):
+    """出口补票契约：`GET /api/doc/<id>` 的 summary_md 恒为「正文 + 恰好一张回程票」。
+
+    为什么要有这层（v0.1.1 的真实缺陷）：回程票只在 `publish` 时写入磁盘，而 `open`
+    不重新生成任何东西 —— 于是 v0.1.1 之前 publish 的**存量文档**磁盘上没有票，前端
+    「下载 MD」下到的文件就没票，`open <md路径>` 重开页面这条功能对它们全部失效。
+    修法是在服务出口统一补票，**只读不写**（用户数据只能由 publish 写）。
+    """
+    # 1) 存量文档：磁盘上确实没票 → API 返回带票
+    legacy_id = "2026-09-18-legacy-doc"
+    legacy_dir = make_doc(paths.DOCS_DIR, legacy_id, summary=LEGACY_SUMMARY)
+    disk = legacy_dir / "summary.md"
+    check("存量文档：磁盘上确实没有票",
+          footer.parse_footer_doc_id(disk.read_text(encoding="utf-8")) is None)
+    before = hashlib.sha256(disk.read_bytes()).hexdigest()
+
+    status, _, payload = fetch(base, f"/api/doc/{legacy_id}")
+    check("存量文档（磁盘无票）→ 200", status == 200)
+    served = json.loads(payload)["summary_md"]
+    check("存量文档：summary_md 带票", "course-digest: docId=" in served)
+    check("存量文档：票里的 docId 正确", footer.parse_footer_doc_id(served) == legacy_id)
+    check("存量文档：票恰好一张（不叠加）", served.count("course-digest: docId=") == 1)
+
+    # 2) 副作用检查：这个请求**没写盘**（磁盘 sha256 前后一致）
+    after = hashlib.sha256(disk.read_bytes()).hexdigest()
+    check("存量文档：请求不写盘（磁盘 sha256 前后一致）", before == after)
+
+    # 3) 幂等：同一 doc 连请求两次，返回体完全一致
+    _, _, payload2 = fetch(base, f"/api/doc/{legacy_id}")
+    check("存量文档：连请求两次返回完全一致（幂等）", payload == payload2)
+
+    # 4) footer 不干扰正文：正文逐字节相等 + 段落数 / 锚点数不变
+    served_body = footer.strip_footer(served)
+    disk_body = footer.strip_footer(disk.read_text(encoding="utf-8"))
+    check("footer 不干扰正文：剥离后正文逐字节一致", served_body == disk_body)
+    check("footer 不干扰正文：锚点数量不变",
+          served_body.count("<!-- pages:") == disk_body.count("<!-- pages:"))
+    check("footer 不干扰正文：段落数 / 带锚点段落数不变",
+          publish.anchor_coverage(served_body)[:2] == publish.anchor_coverage(disk_body)[:2])
+
+    # 5) 已带票的真实产物：API 返回与磁盘逐字节一致（且连请求两次也一致）
+    on_disk = (paths.DOCS_DIR / real_id / "summary.md").read_text(encoding="utf-8")
+    _, _, p3 = fetch(base, f"/api/doc/{real_id}")
+    _, _, p4 = fetch(base, f"/api/doc/{real_id}")
+    check("已带票文档：API 返回与磁盘逐字节一致", json.loads(p3)["summary_md"] == on_disk)
+    check("已带票文档：连请求两次也完全一致", p3 == p4)
 
 
 # ----------------------------------------------------------------------
@@ -222,12 +280,16 @@ def main() -> None:
     check_no_relative_assets()
     check_buttons_wired()
 
-    saved_docs = paths.DOCS_DIR
+    # 硬规矩：测试绝不碰真实的 ~/.course-digest/ —— 把四个路径全重定向到临时目录
+    saved = (paths.DATA_DIR, paths.DOCS_DIR, paths.PORT_FILE, paths.PID_FILE)
     tmp = Path(tempfile.mkdtemp(prefix="cd-http-test-"))
     docs = tmp / "docs"
     doc_id = "2026-09-19-demo-doc"
     make_doc(docs, doc_id)
+    paths.DATA_DIR = tmp
     paths.DOCS_DIR = docs
+    paths.PORT_FILE = tmp / "port"
+    paths.PID_FILE = tmp / "pid"
 
     srv = ThreadingHTTPServer(("127.0.0.1", 0), QuietHandler)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -236,10 +298,11 @@ def main() -> None:
     try:
         check_http(base, doc_id)
         check_pdf_download_route(base, doc_id)
+        check_summary_footer_outlet(base, doc_id)
     finally:
         srv.shutdown()
         srv.server_close()
-        paths.DOCS_DIR = saved_docs
+        paths.DATA_DIR, paths.DOCS_DIR, paths.PORT_FILE, paths.PID_FILE = saved
 
     print("ALL PASS")
 
