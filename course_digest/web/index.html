@@ -26,6 +26,24 @@
       <button type="button" data-version="simplified" class="active">简化版</button>
       <button type="button" data-version="full">完整版</button>
     </div>
+
+    <!-- 字号控件：MD 与 PDF 是**两套独立语义**（MD 改排版 / PDF 改缩放，ADR-018），
+         所以两组控件、两套 localStorage 键，互不影响 -->
+    <div class="font-controls" id="font-controls">
+      <span class="font-group" data-target="pdf">
+        <span class="font-label">PDF</span>
+        <button type="button" class="font-dec" aria-label="缩小 PDF">−</button>
+        <button type="button" class="font-now" aria-label="重置 PDF 字号（点击回到 100%）">100%</button>
+        <button type="button" class="font-inc" aria-label="放大 PDF">+</button>
+      </span>
+      <span class="font-group" data-target="md">
+        <span class="font-label">MD</span>
+        <button type="button" class="font-dec" aria-label="缩小 MD">−</button>
+        <button type="button" class="font-now" aria-label="重置 MD 字号（点击回到 16）">16</button>
+        <button type="button" class="font-inc" aria-label="放大 MD">+</button>
+      </span>
+    </div>
+
     <button type="button" id="btn-download">下载 MD</button>
     <button type="button" id="btn-pdf">下载 PDF</button>
   </div>

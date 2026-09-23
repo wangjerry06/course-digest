@@ -6,8 +6,12 @@
 * { box-sizing: border-box; }
 
 :root {
-  /* 品牌色：悬停高亮、段首 ▸ 等都用它，改一处全跟（ADR-016 的「主题色变就跟着变」） */
+  /* 品牌色：悬停高亮、段首 ▸、分栏手柄都用它，改一处全跟（ADR-016） */
   --accent: #0066cc;
+
+  /* 总结正文字号：由「MD − / +」控件改（ADR-018：MD 走 CSS 变量，
+     浏览器自动重排，零重渲成本）。12-24px，默认 16。 */
+  --md-font-size: 16px;
 }
 
 html, body {
@@ -62,6 +66,21 @@ button:active { background: #e6e6e9; }
   color: #fff;
   position: relative;
   z-index: 1;
+}
+
+/* ---------- 字号控件（F7，ADR-018：MD / PDF 两套独立语义）---------- */
+
+.font-controls { display: flex; align-items: center; gap: 10px; }
+.font-group { display: inline-flex; align-items: center; gap: 2px; }
+.font-label { color: #6e6e73; font-size: 11px; }
+
+/* 数字本身就是「重置」按钮：等宽字形 + 固定宽度，避免 100% → 80% 时按钮宽度跳动 */
+.font-now { font-variant-numeric: tabular-nums; min-width: 3.7em; }
+.font-group .font-dec, .font-group .font-inc { padding: 5px 9px; }
+
+/* 窄窗口时藏掉 PDF/MD 标签，给下载按钮让位（按钮自带 aria-label，可访问性不丢） */
+@media (max-width: 1200px) {
+  .font-label { display: none; }
 }
 
 /* ---------- 主体网格 ---------- */
@@ -191,6 +210,10 @@ button:active { background: #e6e6e9; }
   max-width: 46em;
   margin: 0 auto;
   padding: 20px 24px 64px;
+  /* 字号由 --md-font-size 控制（注意 #md 自己就是 <article>，
+     不存在 #md article 这种后代元素 —— 选择器写错的话控件会变成哑炮） */
+  font-size: var(--md-font-size);
+  line-height: 1.6;
 }
 
 /* 当前被点击的段落短暂高亮（ADR-007 单向联动） */
@@ -202,7 +225,8 @@ button:active { background: #e6e6e9; }
 }
 
 #md h2 {
-  font-size: 17px;
+  /* 用 em 而不是 px：字号调到 24 时，绝对 px 的标题会比正文还小（1.2em ≈ 原 17px @14px） */
+  font-size: 1.2em;
   margin: 1.6em 0 .6em;
   padding-bottom: .25em;
   border-bottom: 1px solid #e6e6e9;
@@ -225,7 +249,7 @@ button:active { background: #e6e6e9; }
   overflow: auto;
 }
 #md pre code { background: none; padding: 0; }
-#md table { border-collapse: collapse; font-size: 13px; }
+#md table { border-collapse: collapse; font-size: .93em; }
 #md th, #md td { border: 1px solid #e0e0e4; padding: 4px 10px; text-align: left; }
 #md th { background: #f7f7fa; }
 
@@ -266,10 +290,10 @@ button:active { background: #e6e6e9; }
   border-left: 3px solid #ff9f0a;
   background: #fffaf0;
   color: #8a5a00;
-  font-size: 12.5px;
+  font-size: .8em;
   border-radius: 0 6px 6px 0;
 }
-.skipped-banner button { padding: 2px 8px; font-size: 12px; flex: none; }
+.skipped-banner button { padding: 2px 8px; font-size: .96em; flex: none; }
 
 /* 锚点指向已删页、连回退都失败时（理论分支）只高亮不滚动 */
 .skipped-banner.no-target { border-left-color: #b8b8bd; color: #6e6e73; background: #f7f7fa; }

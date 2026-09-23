@@ -316,7 +316,111 @@ const jsHandlePx = Number(
 check(`几何: CSS 手柄轨道(${trackPx}px) 与 JS 常量(${jsHandlePx}px) 一致`,
   trackPx > 0 && trackPx === jsHandlePx);
 
-/* index.html 的按钮接线在 http_test.py 里查（那边本来就在做静态资产检查） */
+/* ------------------------------------------------------------------ *
+ * 字号调整（F7，ADR-018：MD / PDF 两路独立）
+ * ------------------------------------------------------------------ */
+
+/* const 常量也照「真源码」来：从 app.js 里切出 `const NAME = ...;` 再 eval，
+   所以改了 app.js 的档位/范围而没同步这里的期望值，测试会立刻红。 */
+function loadConst(name) {
+  const m = SRC.match(new RegExp(`const ${name}\\s*=\\s*(\\{[\\s\\S]*?\\});`));
+  if (!m) throw new Error(`app.js 里找不到 const ${name}`);
+  return new Function(`return (${m[1]});`)();
+}
+
+const MD_FONT = loadConst('MD_FONT');
+const PDF_FONT = loadConst('PDF_FONT');
+const stepMdFont = load('stepMdFont', { MD_FONT });
+const stepPdfFont = load('stepPdfFont', { PDF_FONT });
+const pdfFontLabel = load('pdfFontLabel');
+const clampNumber = load('clampNumber');
+const fontKey = load('fontKey');
+
+check('MD 档位：12-24、步长 1、默认 16',
+  MD_FONT.min === 12 && MD_FONT.max === 24 && MD_FONT.step === 1 && MD_FONT.default === 16);
+check('PDF 档位：80% / 100% / 120% / 140% / 160%，默认 100%',
+  eq(PDF_FONT.levels, [0.8, 1.0, 1.2, 1.4, 1.6]) && PDF_FONT.default === 1.0);
+
+check('stepMdFont: 加一档', stepMdFont(16, +1) === 17);
+check('stepMdFont: 减一档', stepMdFont(16, -1) === 15);
+check('stepMdFont: 到上限不再涨', stepMdFont(24, +1) === 24);
+check('stepMdFont: 到下限不再降', stepMdFont(12, -1) === 12);
+check('stepMdFont: 越界值先夹回范围再加', stepMdFont(99, +1) === 24);
+
+check('stepPdfFont: 100% → 120%', stepPdfFont(1.0, +1) === 1.2);
+check('stepPdfFont: 100% → 80%', stepPdfFont(1.0, -1) === 0.8);
+check('stepPdfFont: 到上限不再涨', stepPdfFont(1.6, +1) === 1.6);
+check('stepPdfFont: 到下限不再降', stepPdfFont(0.8, -1) === 0.8);
+check('stepPdfFont: 5 档从头点到尾再点回来，逐档走完',
+  eq([0.8, 1.0, 1.2, 1.4, 1.6].map((v) => stepPdfFont(v, +1)),
+     [1.0, 1.2, 1.4, 1.6, 1.6]));
+check('stepPdfFont: 不在档位上的脏值从默认档开始数', stepPdfFont(1.3, +1) === 1.2);
+
+check('pdfFontLabel: 0.8 → 80%', pdfFontLabel(0.8) === '80%');
+check('pdfFontLabel: 1.6 → 160%', pdfFontLabel(1.6) === '160%');
+check('pdfFontLabel: 1.0 → 100%（不带小数点）', pdfFontLabel(1.0) === '100%');
+
+check('clampNumber: 正常值原样返回', clampNumber('20', 16, 12, 24) === 20);
+check('clampNumber: 空值退回默认', clampNumber(null, 16, 12, 24) === 16);
+check('clampNumber: 垃圾值退回默认', clampNumber('abc', 16, 12, 24) === 16);
+check('clampNumber: 超上限夹回', clampNumber('999', 16, 12, 24) === 24);
+check('clampNumber: 超下限夹回', clampNumber('-5', 16, 12, 24) === 12);
+check('clampNumber: 小数值（PDF 档）可用', clampNumber('1.4', 1.0, 0.8, 1.6) === 1.4);
+
+check('fontKey: MD 与 PDF 是两套独立的键（ADR-018）',
+  fontKey('md', 'doc1') === 'course-digest:doc1:font-md'
+  && fontKey('pdf', 'doc1') === 'course-digest:doc1:font-pdf');
+check('fontKey: 不同 docId 互不干扰',
+  fontKey('md', 'a') !== fontKey('md', 'b'));
+
+/* HTML / CSS 静态检查 */
+check('index.html: 两组字号控件，PDF 在前 MD 在后',
+  /data-target="pdf"[\s\S]*?data-target="md"/.test(HTML));
+check('index.html: 每组各有 − / 数字 / + 三个按钮',
+  (HTML.match(/class="font-dec"/g) || []).length === 2
+  && (HTML.match(/class="font-now"/g) || []).length === 2
+  && (HTML.match(/class="font-inc"/g) || []).length === 2);
+check('index.html: 按钮都带 aria-label（窄屏藏标签后可访问性不丢）',
+  (HTML.match(/aria-label="(缩小|放大|重置) (MD|PDF)/g) || []).length === 6);
+check('index.html: 点数字重置要能从 aria-label 看出来',
+  /aria-label="重置 MD 字号/.test(HTML) && /aria-label="重置 PDF 字号/.test(HTML));
+
+check('style.css: MD 字号走 --md-font-size 变量',
+  /#md\s*\{[^}]*font-size:\s*var\(--md-font-size\)/.test(CSS));
+check('style.css: :root 里 --md-font-size 默认 16px',
+  /:root\s*\{[^}]*--md-font-size:\s*16px/.test(CSS));
+check('style.css: 选择器是 #md 本身（#md article 会选不到任何元素）',
+  !/#md article\s*\{/.test(CSS));
+check('style.css: 数字按钮等宽数字 + 固定宽度（防止 100%→80% 时宽度跳动）',
+  /\.font-now\s*\{[^}]*tabular-nums[^}]*min-width/.test(CSS));
+
+/* 字号变大时排版不能崩：MD 里的字号必须是相对单位。
+   绝对 px 的标题在字号 24 时会比正文还小 —— 这是最容易漏掉的一类退化。 */
+const absFontSizes = [...CSS.matchAll(/(#md[^{]*\{[^}]*?font-size:\s*(\d+(?:\.\d+)?)px)/g)]
+  .map((m) => m[0]);
+check('style.css: #md 区域内没有任何绝对 px 字号（除 #md 自身的变量）',
+  absFontSizes.filter((rule) => !/font-size:\s*var\(/.test(rule)).length === 0);
+check('style.css: h2 用 em（不会比正文小）', /#md h2\s*\{[^}]*font-size:\s*[\d.]+em/.test(CSS));
+check('style.css: table 用 em', /#md table[^{]*\{[^}]*font-size:\s*[\d.]+em/.test(CSS));
+
+/* 接线与行为 */
+check('app.js: main() 里真的调用了 initFontControls()',
+  /^\s*initFontControls\(\);/m.test(SRC));
+check('app.js: MD 用 CSS 变量、PDF 用 PDF.js 缩放（两路）',
+  /setProperty\('--md-font-size'/.test(SRC) && /state\.pdfZoom\s*=/.test(SRC));
+check('app.js: PDF 缩放重排会保住当前页',
+  /function relayoutPdfKeepingPosition\(\)[\s\S]*?currentVisiblePage\(\)[\s\S]*?layoutPages\(\)[\s\S]*?observePages\(\)[\s\S]*?scrollToPage\(visible\)/
+    .test(SRC));
+check('app.js: 改 PDF 缩放节流到一帧（连点不触发多轮重排）',
+  /pdfZoomPending\s*=\s*true[\s\S]*?requestAnimationFrame/.test(SRC));
+check('app.js: 点数字会清掉已存的值（回到未设置状态）',
+  /localStorage\.removeItem\(fonts\[target\]\.key\)/.test(SRC));
+
+/* 渲染上限：fit 受 MAX_SCALE 约束，用户倍率另乘 —— 别把 160% 悄悄吃掉 */
+const maxScale = Number((SRC.match(/const MAX_SCALE\s*=\s*(\d+)/) || [])[1]);
+const maxZoom = Number((SRC.match(/const MAX_ZOOM\s*=\s*([\d.]+)/) || [])[1]);
+check(`渲染上限: fit(${maxScale}) × 最大倍率(${maxZoom}) = 最终上限，且倍率与 PDF 档位最大值一致`,
+  maxScale > 0 && maxZoom === PDF_FONT.levels[PDF_FONT.levels.length - 1]);
 
 if (failed) {
   console.error(`\n${failed} 条失败`);

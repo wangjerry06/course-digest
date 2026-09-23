@@ -22,6 +22,8 @@ const FETCH_TIMEOUT_MS = 5000;
 const PDF_TIMEOUT_MS = 15000;
 
 const VENDOR = '/vendor/pdfjs/';
+/* 用户缩放倍率的上限档（PDF_FONT.levels 的最大值）。渲染上限 = MAX_SCALE × 它 */
+const MAX_ZOOM = 1.6;
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -31,6 +33,7 @@ const state = {
   pdf: null,
   sizes: [],        // [{w,h}]：scale=1 时的页面尺寸
   scale: 1,
+  pdfZoom: 1,       // 用户缩放倍率（100% = 刚好铺满左栏，ADR-018）
   pages: [],        // 每页的容器 div
   rendered: new Map(),
   observer: null,
@@ -381,7 +384,11 @@ function layoutPages() {
   state.pages = [];
 
   const avail = Math.max(200, $('#pdf-scroll').clientWidth - 24);
-  const scale = Math.min(MAX_SCALE, avail / state.sizes[0].w);
+  /* 「适配容器宽度」这一步照旧受 MAX_SCALE 约束；用户缩放是**在它之上再乘**的，
+     所以宽屏上把 160% 悄悄吃掉是不对的 —— 单独给最终值一个上限（MAX_SCALE ×
+     最大倍率），只防失控，不压缩用户意图（ADR-018）。 */
+  const fit = Math.min(MAX_SCALE, avail / state.sizes[0].w);
+  const scale = Math.min(fit * state.pdfZoom, MAX_SCALE * MAX_ZOOM);
   state.scale = scale;
 
   const frag = document.createDocumentFragment();
@@ -529,6 +536,17 @@ function currentVisiblePage() {
     if (state.pages[i].getBoundingClientRect().bottom > top + 4) return i + 1;
   }
   return state.pages.length || 1;
+}
+
+/* 重排 PDF 并**保住当前页**。所有会改变「页面显示尺寸」的动作都走这条：
+   窗口 resize、拖分栏结束、改 PDF 缩放。
+   不做的话，用户会看到自己正读的那一页被甩走 —— 这是最容易被当成「坏了」的体验。 */
+function relayoutPdfKeepingPosition() {
+  if (!state.pdf) return;
+  const visible = currentVisiblePage();
+  layoutPages();
+  observePages();
+  scrollToPage(visible);
 }
 
 function highlightMd(el) {
@@ -724,12 +742,7 @@ function initSplitDrag() {
 
     /* 分栏宽度变了，PDF 的「适配容器宽度」比例也得跟着重算 —— 否则会留着旧宽度：
        变窄时出横向滚动条，变宽时两侧一大片留白。与窗口 resize 走同一条路。 */
-    if (state.pdf) {
-      const visible = currentVisiblePage();
-      layoutPages();
-      observePages();
-      scrollToPage(visible);
-    }
+    relayoutPdfKeepingPosition();
     lastX = null;
   };
 
@@ -746,6 +759,117 @@ function initSplitDrag() {
   handle.addEventListener('pointermove', onMove);
   handle.addEventListener('pointerup', endDrag);
   handle.addEventListener('pointercancel', endDrag);
+}
+
+/* ------------------------------------------------------------------ *
+ * 字号调整（F7，ADR-018：按**内容载体**分两路）
+ *   MD  → CSS 变量 --md-font-size，浏览器自动重排，零重渲成本
+ *   PDF → PDF.js 的 scale（canvas 渲染，CSS 改不动），要重渲可见页
+ * 两者语义不同，所以是两套独立控件 + 两套独立 localStorage 键，
+ * 「MD 调到 24 而 PDF 跟着变」这种事不该发生。
+ * ------------------------------------------------------------------ */
+
+const MD_FONT = { min: 12, max: 24, step: 1, default: 16 };
+const PDF_FONT = { levels: [0.8, 1.0, 1.2, 1.4, 1.6], default: 1.0 };
+
+/* 从 localStorage 读回来的字符串 → 合法的数值。脏数据一律退回默认值，
+   越界值夹进范围 —— 存的是用户自己改过的 localStorage，不能信。 */
+function clampNumber(raw, fallback, min, max) {
+  const value = Number.parseFloat(raw);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
+}
+
+/* MD：连续加减，夹在 [min, max] */
+function stepMdFont(value, dir) {
+  const next = value + dir * MD_FONT.step;
+  return Math.min(MD_FONT.max, Math.max(MD_FONT.min, next));
+}
+
+/* PDF：5 个固定档（80% / 100% / 120% / 140% / 160%），取相邻档。
+   值不在档上（比如 localStorage 里是旧版留下的 1.3）就从默认档开始数。 */
+function stepPdfFont(value, dir) {
+  const found = PDF_FONT.levels.indexOf(value);
+  const at = found < 0 ? PDF_FONT.levels.indexOf(PDF_FONT.default) : found;
+  const next = Math.min(PDF_FONT.levels.length - 1, Math.max(0, at + dir));
+  return PDF_FONT.levels[next];
+}
+
+function pdfFontLabel(value) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function fontKey(target, docId) {
+  return `course-digest:${docId}:font-${target}`;
+}
+
+function applyMdFont(value) {
+  document.documentElement.style.setProperty('--md-font-size', `${value}px`);
+}
+
+/* PDF 缩放：改 scale 之后必须重排重渲，且**保住当前页**。
+   节流到一帧 —— 连着点几下 +，不该触发几轮完整的重排。 */
+let pdfZoomPending = false;
+
+function applyPdfFont(value) {
+  if (value !== state.pdfZoom) state.pdfZoom = value;
+  if (!state.pdf || pdfZoomPending) return;
+  pdfZoomPending = true;
+  requestAnimationFrame(() => {
+    pdfZoomPending = false;
+    relayoutPdfKeepingPosition();
+  });
+}
+
+function initFontControls() {
+  const box = $('#font-controls');
+  if (!box) return;
+
+  const docId = state.data.meta.id || '';
+  const lastLevel = PDF_FONT.levels[PDF_FONT.levels.length - 1];
+  const fonts = {
+    md: {
+      key: fontKey('md', docId),
+      value: clampNumber(localStorage.getItem(fontKey('md', docId)),
+        MD_FONT.default, MD_FONT.min, MD_FONT.max),
+    },
+    pdf: {
+      key: fontKey('pdf', docId),
+      value: clampNumber(localStorage.getItem(fontKey('pdf', docId)),
+        PDF_FONT.default, PDF_FONT.levels[0], lastLevel),
+    },
+  };
+
+  for (const group of box.querySelectorAll('.font-group')) {
+    const target = group.dataset.target;          // 'md' | 'pdf'
+    const now = group.querySelector('.font-now');
+    const isMd = target === 'md';
+
+    const apply = (value) => {
+      fonts[target].value = value;
+      if (isMd) applyMdFont(value);
+      else applyPdfFont(value);
+      now.textContent = isMd ? String(value) : pdfFontLabel(value);
+    };
+
+    const step = (dir) => {
+      const current = fonts[target].value;
+      const next = isMd ? stepMdFont(current, dir) : stepPdfFont(current, dir);
+      if (next === current) return;               // 到头了就不写盘、不重排
+      apply(next);
+      localStorage.setItem(fonts[target].key, String(next));
+    };
+
+    group.querySelector('.font-dec').addEventListener('click', () => step(-1));
+    group.querySelector('.font-inc').addEventListener('click', () => step(+1));
+    /* 点数字 = 重置（并清掉存的值，回到「未设置」状态） */
+    now.addEventListener('click', () => {
+      apply(isMd ? MD_FONT.default : PDF_FONT.default);
+      localStorage.removeItem(fonts[target].key);
+    });
+
+    apply(fonts[target].value);                   // 首次应用（含读回的值）
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -767,12 +891,7 @@ function wireInteractions() {
   window.addEventListener('resize', () => {
     if (!state.pdf) return;
     clearTimeout(timer);
-    timer = setTimeout(async () => {
-      const visible = currentVisiblePage();
-      layoutPages();
-      observePages();
-      scrollToPage(visible);
-    }, 200);
+    timer = setTimeout(relayoutPdfKeepingPosition, 200);
   });
 }
 
@@ -806,6 +925,7 @@ async function main() {
     buildBanners();
     wireInteractions();
     initSplitDrag();               // 先把存下来的分栏比例应用上，再布局 PDF（避免闪一下）
+    initFontControls();            // 字号同理：PDF 倍率先就位，再让 switchVersion 去布局
     await switchVersion('simplified', { initial: true });
     console.info('course-digest: 已就绪', {
       mode: new URLSearchParams(location.search).has('mock') ? 'mock' : 'api',
