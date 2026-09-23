@@ -16,15 +16,20 @@
     GET /api/doc/<id>                            → 前端约定的返回体（字段名见 doc_payload）；
                                                    其中 summary_md **恒为「正文 + 恰好一张回程票」**
     GET /api/doc/<id>/pdf?version=full|simplified → PDF 文件
+    POST /api/doc/<id>/summary                   → 编辑器保存 summary.md（走 publish 同款校验链）
 
 回程票（footer）只在 `publish` 时写入磁盘，而 `open` 不重新生成任何东西 —— 于是
 v0.1.1 之前 publish 的**存量文档**磁盘上没有票，前端「下载 MD」拿到的东西没票，
 `open <md路径>` 重开页面这条功能对它们全部失效。修法是在这个出口统一补票：读到的
-summary 一律走 `strip_footer + build_footer`。**只读不写** —— 用户数据只能由 publish
-写；对已 publish 过的文档，磁盘本就是「正文 + 票」，再套一次逐字节等价（幂等）。
+summary 一律走 `strip_footer + build_footer`。**只读不写**：用户数据只能由 publish 写；
+对已 publish 过的文档，磁盘本就是「正文 + 票」，再套一次逐字节等价（幂等）。
+
+唯一的写接口是 `POST /api/doc/<id>/summary`（编辑器保存），它不另起一套写法，而是
+复用 publish 的 `_write_summary_md` —— 于是「同口径 → 幂等」对两条路径同时成立。
 
 安全：docId 白名单 → 400；所有拼出来的路径 resolve() 后必须落在各自
-前缀内 → 403；不发 CORS 头；只处理 GET。
+前缀内 → 403；不发 CORS 头。读接口只有 GET；写接口只有
+`POST /api/doc/<id>/summary` 这一个，且只写 summary.md。
 """
 
 import json
@@ -48,6 +53,10 @@ PORT_START = 7317
 PORT_TRIES = 20
 HEALTH_TIMEOUT = 5.0        # ensure_server 轮询 /health 的上限
 STOP_WAIT = 3.0             # stop 等进程退出的上限
+
+# POST 请求体上限。编辑器送来的是一份 markdown 总结，正常在 100KB 以内；
+# 4 MiB 留了两个数量级余量，只用来挡住「客户端把长度写成天文数字」这一类请求。
+MAX_BODY_BYTES = 4 * 1024 * 1024
 
 # 代码仓库根目录：detached 子进程要在这里跑 `python3 -m course_digest`
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -127,6 +136,73 @@ def doc_payload(doc_dir: Path) -> dict:
 
 
 # ----------------------------------------------------------------------
+# 编辑器保存（POST /api/doc/<id>/summary）
+# ----------------------------------------------------------------------
+
+def _save_summary_md(doc_dir: Path, doc_id: str, raw: str) -> tuple[int, dict]:
+    """保存编辑器送来的 summary.md，返回 (状态码, 响应体)。
+
+    走的是 **publish 同款校验链**（strip_footer → validate_summary → anchor_coverage
+    → strip → 落盘），绝不另立一套口径：
+
+    - 锚点不合法 / 越界 → **400 阻止**（存下去会做出一个点不动的总结）
+    - 覆盖率 < 100%     → **不阻止**，只回报（编辑器是草稿场景，半成品必须能存）
+
+    **只写 summary.md**：PDF / page-map / extract / meta 是 publish 的事，这里一律不动。
+
+    成功返回 `summary_md` = 已补好回程票的最终形态，前端拿到即可回填 state，
+    不必自己拼 footer（也不该自己拼 —— footer 的格式只由 `footer.py` 定义）。
+    """
+    # publish 在模块级 import 了 serve，这里只能懒加载：模块级 import 会成环。
+    # 校验链的真相源在 publish，宁可懒加载一次，也不在这里复制一份规则
+    # —— 两份规则迟早分叉，而分叉的口径比一次 import 贵得多。
+    from . import publish
+
+    meta = _read_json(doc_dir / "meta.json")
+    if meta is None:
+        return 400, {"ok": False, "error": "cannot read meta.json"}
+    try:
+        original_pages = int(meta.get("original_pages") or 0)
+    except (TypeError, ValueError):
+        original_pages = 0
+    if original_pages <= 0:
+        return 400, {"ok": False, "error": "meta.json 缺 original_pages；先跑 import + publish"}
+
+    # 1) 先剥回程票：校验与覆盖率都在**剥离后**的正文上算（与 publish 逐字对齐），
+    #    否则 footer 会被当成一个无锚段落，把覆盖率拉低
+    body = strip_footer(raw)
+
+    # 2) 锚点合法性 = 硬门禁
+    _, errors = publish.validate_summary(body, original_pages)
+
+    # 3) 覆盖率 = 只回报、不阻止（顺带让 400 也能带上「哪些段落还没锚点」）
+    anchored, total, unanchored = publish.anchor_coverage(body)
+    coverage = (100.0 * anchored / total) if total else 0.0
+
+    if errors:
+        return 400, {
+            "ok": False,
+            "errors": errors,
+            "coverage": coverage,
+            "anchored": anchored,
+            "total": total,
+            "unanchored": unanchored,
+        }
+
+    # 4) 落盘：与 publish 同一个写入函数（tmp → rename，原子替换）
+    publish._write_summary_md(doc_dir, body, doc_id)
+
+    return 200, {
+        "ok": True,
+        "coverage": coverage,
+        "anchored": anchored,
+        "total": total,
+        "unanchored": unanchored,
+        "summary_md": body + build_footer(doc_id),
+    }
+
+
+# ----------------------------------------------------------------------
 # 请求处理
 # ----------------------------------------------------------------------
 
@@ -153,11 +229,14 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "course-digest"
     protocol_version = "HTTP/1.1"      # 允许多个 vendor 小文件复用连接
 
-    # ---- 只处理 GET：任何带请求体的方法一律拒绝 ----
+    # ---- 写接口只有一个：POST /api/doc/<id>/summary；其余带请求体的方法一律拒绝 ----
     def do_POST(self):
+        # 与 do_GET 同一套解析：先 urlparse 再 unquote，路径比较才对得上
+        # （`%2e%2e` 这类编码必须**先解开**再判断段数，否则会被当成一个普通 docId）
+        path = urllib.parse.unquote(urllib.parse.urlparse(self.path).path)
+        if path.startswith("/api/doc/"):
+            return self._api_doc_post(path)
         self._method_not_allowed()
-
-    do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = do_POST
 
     def _method_not_allowed(self):
         # 请求体一律不读；但连接上可能还留着没读完的字节，会被当成下一个请求
@@ -166,6 +245,9 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps({"error": "only GET is allowed"}).encode("utf-8")
         self._send(405, body, "application/json; charset=utf-8",
                    extra={"Allow": "GET", "Connection": "close"})
+
+    # 其余方法一律拒绝。别名必须在 _method_not_allowed 定义之后才能指到它。
+    do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = _method_not_allowed
 
     # ---- 统一出口：一定带 Content-Length（HTTP/1.1 keep-alive 的前提）----
     def _send(self, status, body: bytes, ctype: str, extra: dict | None = None):
@@ -193,6 +275,34 @@ class Handler(BaseHTTPRequestHandler):
 
     def _error(self, status: int, message: str):
         self._json(status, {"error": message})
+
+    def _read_request_body(self):
+        """读 POST 请求体，返回 bytes；读不到完整长度时返回 None。
+
+        必须**读满 Content-Length**：本服务是 HTTP/1.1 keep-alive，漏读的字节会被
+        当成下一个请求的开头解析（串包）。所以任何「没能读满」的分支都要顺手关连接，
+        让客户端重开一条，而不是留下一条错位的连接。
+
+        长度写成负数 / 天文数字 / 干脆没有 → 一律 None（调用方回 400）。
+        """
+        raw = self.headers.get("Content-Length")
+        try:
+            length = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if length < 0 or length > MAX_BODY_BYTES:
+            self.close_connection = True        # 剩下的字节不读了，连接必须关
+            return None
+        if length == 0:
+            return b""
+        try:
+            data = self.rfile.read(length)
+        except OSError:
+            return None
+        if len(data) != length:
+            self.close_connection = True
+            return None
+        return data
 
     def log_message(self, fmt, *args):
         sys.stderr.write("%s - %s\n" % (self.address_string(), fmt % args))
@@ -262,6 +372,56 @@ class Handler(BaseHTTPRequestHandler):
             return self._error(
                 404, f"doc not published yet (missing {', '.join(exc.missing)}); run publish first"
             )
+
+    # ---- POST /api/doc/<id>/summary ----
+
+    def _api_doc_post(self, path: str):
+        """POST 在 /api/doc/ 下只认 `<id>/summary` 一条，其余按语义分别拒绝。
+
+        - `/api/doc/<id>/summary`        → 编辑器保存
+        - `/api/doc/<id>`、`.../pdf`     → 405（这是只读资源，方法不对），与改前一致
+        - 段数 / 尾段不对（`.../summary/bar` 之类）→ 400（客户端把路径写错了）
+        """
+        parts = path.split("/")             # ["", "api", "doc", <id>, ...]
+        if len(parts) < 4:
+            return self._json(400, {"ok": False, "error": f"invalid path: {path}"})
+        doc_id, tail = parts[3], parts[4:]
+        if tail == ["summary"]:
+            return self._api_save_summary(doc_id)
+        if tail in ([], ["pdf"]):
+            return self._method_not_allowed()
+        return self._json(400, {"ok": False, "error": f"invalid path: {path}"})
+
+    def _api_save_summary(self, doc_id: str):
+        # 1) 白名单：格式不合法直接 400（与 GET /api/doc/<id> 同一道闸）
+        try:
+            doc_dir = paths.doc_dir(doc_id)
+        except ValueError as exc:
+            return self._json(400, {"ok": False, "error": str(exc)})
+        # 2) 解析后必须仍在 docs/ 前缀内，否则 403
+        #    （正则允许 "." 与 ".."，这一道才是真正拦住路径遍历的地方 —— 照抄 GET 的口径）
+        docs_root = paths.DOCS_DIR.resolve()
+        doc_dir = doc_dir.resolve()
+        if doc_dir != docs_root and docs_root not in doc_dir.parents:
+            return self._json(403, {"ok": False, "error": "forbidden"})
+        if not doc_dir.is_dir():
+            return self._json(404, {"ok": False, "error": f"doc not found: {doc_id}"})
+
+        raw_body = self._read_request_body()
+        if raw_body is None:
+            return self._json(400, {"ok": False, "error": "invalid request body"})
+        try:
+            data = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
+            return self._json(400, {"ok": False, "error": "body must be JSON"})
+        if not isinstance(data, dict):
+            return self._json(400, {"ok": False, "error": "body must be a JSON object"})
+        md = data.get("summary_md")
+        if not isinstance(md, str):
+            return self._json(400, {"ok": False, "error": "summary_md 字段缺失或非字符串"})
+
+        status, payload = _save_summary_md(doc_dir, doc_id, md)
+        return self._json(status, payload)
 
     def _pdf(self, doc_dir: Path, query: dict):
         version = (query.get("version") or ["simplified"])[0]
