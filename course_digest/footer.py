@@ -18,7 +18,16 @@ format 分两段：
 `serve` 又要用这三个函数来统一补票，若 `serve` 再 import `publish` 就会循环导入。
 """
 
+import os
 import re
+
+# 回程票人读段里的 open 命令按平台给真实的那个（ADR-016）：Windows 没有
+# python3（常是 Store 占位假命令），posix 上 python 未必存在。
+# 只影响展示文案；机器可读段只有 docId，两平台格式完全一致。
+_OPEN_CMD = (
+    "python -m course_digest open" if os.name == "nt"
+    else "python3 -m course_digest open"
+)
 
 # 回程票 footer 的机器可读行（写 docId，**不写 URL**：URL 易腐，docId 稳定）
 _FOOTER_ANCHOR_RE = re.compile(r"<!--\s*course-digest:\s*docId=([^\s\n]+)[^>]*-->")
@@ -66,6 +75,6 @@ def build_footer(doc_id: str) -> str:
         f"\n<!-- course-digest: docId={doc_id} -->\n"
         "\n---\n"
         f"<sub>📄 由 course-digest 生成 · docId `{doc_id}` ·\n"
-        "重新打开页面：`python3 -m course_digest open 本md文件路径`"
+        f"重新打开页面：`{_OPEN_CMD} 本md文件路径`"
         "（需本机仓库与 ~/.course-digest 数据）</sub>\n"
     )

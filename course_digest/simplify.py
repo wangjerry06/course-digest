@@ -207,7 +207,7 @@ def simplify_doc(doc_dir: Path, drop: str | None = None) -> dict:
             raise RuntimeError(
                 f"written PDF has {actual} pages, expected {page_map['total_simplified']}"
             )
-        tmp_pdf.replace(doc_dir / "simplified.pdf")
+        paths.atomic_replace(tmp_pdf, doc_dir / "simplified.pdf")
     except Exception as exc:
         tmp_pdf.unlink(missing_ok=True)
         raise SimplifyError(f"failed to write simplified.pdf: {exc}") from exc
@@ -216,7 +216,7 @@ def simplify_doc(doc_dir: Path, drop: str | None = None) -> dict:
     tmp_map.write_text(
         json.dumps(page_map, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    tmp_map.replace(doc_dir / "page-map.json")
+    paths.atomic_replace(tmp_map, doc_dir / "page-map.json")
     return page_map
 
 

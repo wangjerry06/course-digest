@@ -862,6 +862,127 @@ def main():
         finally:
             paths.DOCS_DIR = _saved
 
+    # ==================================================================
+    # v0.2.0 · Windows 兼容（ADR-016）—— 平台分支的纯逻辑测试（macOS 上也能跑）
+    # ==================================================================
+    import os as _os
+
+    # --- paths.atomic_replace：成功 + PermissionError 重试 + 重试耗尽抛出 ---
+    with tempfile.TemporaryDirectory() as td:
+        _td = Path(td)
+        _dest = _td / "dest.txt"
+        _dest.write_text("old", encoding="utf-8")
+        _tmp = _td / "tmp.txt"
+        _tmp.write_text("new", encoding="utf-8")
+        paths.atomic_replace(_tmp, _dest)
+        check("atomic_replace: 正常路径落盘", _dest.read_text(encoding="utf-8") == "new")
+        check("atomic_replace: tmp 已消失", not _tmp.exists())
+
+    class _FlakyTmp:
+        """前两次 replace 抛 PermissionError，第三次成功 —— 模拟 Windows 文件锁。"""
+        def __init__(self):
+            self.n = 0
+
+        def replace(self, dest):
+            self.n += 1
+            if self.n < 3:
+                raise PermissionError(13, "file in use (simulated windows lock)")
+            return dest
+
+    _flaky = _FlakyTmp()
+    paths.atomic_replace(_flaky, "dest", delay=0)
+    check("atomic_replace: PermissionError 后重试成功", _flaky.n == 3)
+
+    class _AlwaysBusy:
+        def replace(self, dest):
+            raise PermissionError(13, "busy")
+
+    check(
+        "atomic_replace: 重试耗尽仍抛 PermissionError",
+        raises(PermissionError, paths.atomic_replace, _AlwaysBusy(), "dest", 2, 0),
+    )
+
+    # --- footer：命令前缀是本平台的真实命令，机器可读段两平台一致 ---
+    _FOOT20 = publish.build_footer("v020-doc")
+    check("v0.2.0 footer: 含 -m course_digest open", "-m course_digest open" in _FOOT20)
+    check(
+        "v0.2.0 footer: 命令前缀取本平台真实值",
+        ("python -m course_digest open" in _FOOT20)
+        == (_os.name == "nt"),
+    )
+    check(
+        "v0.2.0 footer: 机器可读注释不含命令前缀（跨平台格式稳定）",
+        f"<!-- course-digest: docId={'v020-doc'} -->" in _FOOT20,
+    )
+    check("v0.2.0 footer: 解析回程票不受平台影响",
+          publish.parse_footer_doc_id(_FOOT20) == "v020-doc")
+
+    # --- serve.MODULE_CMD：报错提示里的命令前缀 ---
+    check("v0.2.0 MODULE_CMD: 含 -m course_digest", "-m course_digest" in serve.MODULE_CMD)
+    check(
+        "v0.2.0 MODULE_CMD: 前缀按平台",
+        serve.MODULE_CMD.split(" ")[0] == ("python" if _os.name == "nt" else "python3"),
+    )
+
+    # --- _pid_alive_windows：tasklist 输出按 "<pid>" 精确匹配（防 123 误中 1123）---
+    import subprocess as _sub
+
+    class _FakeCompleted:
+        def __init__(self, stdout, returncode=0):
+            self.stdout = stdout
+            self.returncode = returncode
+
+    _real_run = serve.subprocess.run
+    try:
+        serve.subprocess.run = lambda *a, **kw: _FakeCompleted(
+            '"python.exe","1234","Console","1","1,234 K"\n', 0)
+        check("_pid_alive_windows: 进程存在 → True", serve._pid_alive_windows(1234) is True)
+        serve.subprocess.run = lambda *a, **kw: _FakeCompleted(
+            'INFO: No tasks are running which match the specified criteria.\n', 1)
+        check("_pid_alive_windows: 无匹配 → False", serve._pid_alive_windows(1234) is False)
+        # pid 精确匹配：1123 在场也不能替 123 作数
+        serve.subprocess.run = lambda *a, **kw: _FakeCompleted(
+            '"python.exe","1123","Console","1","1,234 K"\n', 0)
+        check("_pid_alive_windows: 1123 在场不算 123 活着",
+              serve._pid_alive_windows(123) is False)
+        # tasklist 本身失败 → 宁可当活着（误判死亡比误杀危险）
+        def _boom(*a, **kw):
+            raise OSError("tasklist missing")
+        serve.subprocess.run = _boom
+        check("_pid_alive_windows: 查询失败 → True（宁可当活着）",
+              serve._pid_alive_windows(1234) is True)
+    finally:
+        serve.subprocess.run = _real_run
+
+    # --- _pid_alive 分发：os.name 切到 nt 走 Windows 分支，posix 走原逻辑 ---
+    _real_name = _os.name
+    try:
+        _os.name = "nt"
+        _hit = {"nt": False}
+        _real_windows = serve._pid_alive_windows
+        serve._pid_alive_windows = lambda pid: (_hit.__setitem__("nt", True) or "via-nt")
+        check("_pid_alive: nt 分发到 windows 分支", serve._pid_alive(7) == "via-nt"
+              and _hit["nt"] is True)
+
+        _os.name = "posix"
+        _hit_posix = {"v": False}
+        _real_posix = serve._pid_alive_posix
+        serve._pid_alive_posix = lambda pid: (_hit_posix.__setitem__("v", True) or "via-posix")
+        check("_pid_alive: posix 分发到原逻辑", serve._pid_alive(7) == "via-posix"
+              and _hit_posix["v"] is True)
+        serve._pid_alive_posix = _real_posix
+        serve._pid_alive_windows = _real_windows
+    finally:
+        _os.name = _real_name
+        serve._pid_alive_posix = _real_posix
+        serve._pid_alive_windows = _real_windows
+
+    # posix 分支本体不回归：活进程 / 不存在的 pid
+    _my_pid = _os.getpid()
+    check("_pid_alive_posix: 自己活着", serve._pid_alive_posix(_my_pid) is True)
+    check("_pid_alive_posix: 不存在的 pid → False",
+          serve._pid_alive_posix(2 ** 22 - 7) is False)
+
     print("ALL PASS")
 
 

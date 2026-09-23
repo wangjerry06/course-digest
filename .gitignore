@@ -18,3 +18,8 @@ MVP边界.md
 提示词-P2.md
 修正提示词-P1-FIX.md
 修正提示词-P3-FIX.md
+
+# Windows 垃圾文件（v0.2.0 起支持 Windows，ADR-016）
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/

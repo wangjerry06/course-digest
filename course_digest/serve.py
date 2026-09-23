@@ -61,6 +61,13 @@ MAX_BODY_BYTES = 4 * 1024 * 1024
 # 代码仓库根目录：detached 子进程要在这里跑 `python3 -m course_digest`
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+# 展示给用户看的 CLI 命令前缀（ADR-016）：Windows 上 python3.exe 常是 Store 的
+# 占位假命令，真实入口是 `python`；posix 上反过来，`python` 未必存在。
+# 只用于报错提示等展示场景；真正起子进程一律用 sys.executable（launch_server）。
+MODULE_CMD = (
+    "python -m course_digest" if os.name == "nt" else "python3 -m course_digest"
+)
+
 
 # ----------------------------------------------------------------------
 # 文档读取（纯文件操作，不起服务；list / api 共用）
@@ -212,6 +219,10 @@ for _ext, _type in (
     (".mjs", "text/javascript"),
     (".js", "text/javascript"),
     (".css", "text/css"),
+    # .html/.htm 显式登记：mimetypes 在 Windows 上会读注册表，某些机器把 .html
+    # 登记成乱七八糟的类型，SPA 入口被发错 Content-Type 直接白屏（ADR-016）。
+    (".html", "text/html"),
+    (".htm", "text/html"),
     (".json", "application/json"),
     (".map", "application/json"),
     (".wasm", "application/wasm"),
@@ -578,7 +589,7 @@ def ensure_server() -> int:
         if proc.poll() is not None:
             raise RuntimeError(
                 f"服务进程启动后立即退出（exit={proc.returncode}）；"
-                f"可用 `python3 -m course_digest serve` 前台跑一次看报错"
+                f"可用 `{MODULE_CMD} serve` 前台跑一次看报错"
             )
         port = port_file()
         if port is not None and _health_ok(port):
@@ -622,7 +633,8 @@ def _process_command(pid: int) -> str | None:
     return None if out.returncode != 0 else ""
 
 
-def _pid_alive(pid: int) -> bool:
+def _pid_alive_posix(pid: int) -> bool:
+    """POSIX 探活：kill(pid, 0) 只查权限不发信号，进程不存在抛 ProcessLookupError。"""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -630,6 +642,31 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _pid_alive_windows(pid: int) -> bool:
+    """Windows 探活（ADR-016）：**绝不能用 os.kill(pid, 0)** —— 它在 Windows 上
+    不做探活，而是 TerminateProcess(pid, 0)，把目标进程真的杀掉。
+
+    这里用 tasklist 只读查询：进程存在时 CSV 输出里带 `"<pid>"` 这个精确字段
+    （用引号包住比对，免得 pid 123 误匹配 1123）；不存在时输出 INFO 提示、无匹配。
+    查询本身失败（tasklist 异常缺失等）宁可当「活着」—— stop 流程会再走
+    终止 + 超时告警兜底，误判死亡比误杀进程危险。
+    """
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True
+    return f'"{pid}"' in (out.stdout or "")
+
+
+def _pid_alive(pid: int) -> bool:
+    if os.name == "nt":
+        return _pid_alive_windows(pid)
+    return _pid_alive_posix(pid)
 
 
 def stop(_args=None) -> int:
@@ -656,19 +693,25 @@ def stop(_args=None) -> int:
         _remove_files_if_ours(port_file(), pid)
         return 1
 
+    # Windows 的 os.kill(pid, SIGTERM) 实际是 TerminateProcess（硬杀，立即生效）；
+    # POSIX 是可被处理的优雅信号。本地 HTTP 服务无状态，硬杀可接受，
+    # pid/port 文件由下方 _remove_files_if_ours 统一清理。
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError as exc:
-        print(f"warning: 发送 SIGTERM 失败：{exc}", file=sys.stderr)
+        print(f"warning: 终止进程失败：{exc}", file=sys.stderr)
         return 1
 
+    # Windows 上 _pid_alive 每次都要起一个 tasklist 子进程（约几百毫秒），
+    # 轮询间隔放宽到 0.5s；POSIX 的 kill(pid, 0) 近乎免费，保持 0.1s。
+    poll_interval = 0.5 if os.name == "nt" else 0.1
     deadline = time.time() + STOP_WAIT
     while time.time() < deadline:
         if not _pid_alive(pid):
             _remove_files_if_ours(port_file(), pid)
             print(f"服务已停止（pid {pid}）", file=sys.stderr)
             return 0
-        time.sleep(0.1)
+        time.sleep(poll_interval)
 
     print(f"warning: pid {pid} 在 {STOP_WAIT:.0f}s 内未退出，pid/port 文件保留", file=sys.stderr)
     return 1

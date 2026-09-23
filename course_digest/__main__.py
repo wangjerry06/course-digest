@@ -93,7 +93,28 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _force_utf8_streams() -> None:
+    """stdout/stderr 强制 UTF-8（ADR-016，Windows 兼容）。
+
+    中文 Windows 上被管道/重定向时，流的编码默认跟随 locale（cp936 等）：
+    footer 里的 📄、stderr 里的 →/… 都会 UnicodeEncodeError —— 本项目的
+    stdout/stderr 是给 agent 解析的硬契约，一个字节崩了整条链就断。
+    统一 reconfigure 成 UTF-8 + errors="replace"，三端（macOS/Linux/Windows）
+    字节口径一致。交互控制台由 Python 的 WinConsoleIO 处理，不受影响；
+    测试里被 redirect 成 StringIO 的流没有 reconfigure 方法，静默跳过。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconf = getattr(stream, "reconfigure", None)
+        if reconf is None:
+            continue
+        try:
+            reconf(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            pass
+
+
 def main(argv=None) -> int:
+    _force_utf8_streams()
     args = build_parser().parse_args(argv)
     return args.func(args)
 

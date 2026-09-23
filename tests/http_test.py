@@ -252,9 +252,17 @@ def check_write_is_atomic():
     """
     src = inspect.getsource(publish._write_summary_md)
     check("_write_summary_md 先写 .tmp 再 replace（原子替换，红线 4）",
-          "tmp" in src and ".replace(" in src and "write_text" in src)
+          "tmp" in src and "write_text" in src
+          # v0.2.0 起 replace 走 paths.atomic_replace（Windows 文件锁重试，ADR-016），
+          # 内联 .replace( 或委托 atomic_replace 都算数
+          and (".replace(" in src or "paths.atomic_replace(" in src))
     check("_write_summary_md 里没有直接写 dest 的分支",
           "dest.write_text" not in src and "dest.write_bytes" not in src)
+    # 委托目标本体也要钉住：atomic_replace 底层必须仍是 tmp→replace 原子替换，
+    # 重试只针对 PermissionError，别的异常照抛
+    _src_ar = inspect.getsource(paths.atomic_replace)
+    check("atomic_replace 底层仍是 tmp.replace（红线 4 不因重试而破）",
+          ".replace(" in _src_ar and "PermissionError" in _src_ar)
 
 
 def check_summary_save_api(base: str):

@@ -234,7 +234,7 @@ def _write_meta(doc_dir: Path, doc_id: str, old: dict, page_map: dict, title: st
 
     tmp = doc_dir / "meta.json.tmp"
     tmp.write_text(json.dumps(new, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    tmp.replace(doc_dir / "meta.json")
+    paths.atomic_replace(tmp, doc_dir / "meta.json")
     return new
 
 
@@ -258,7 +258,7 @@ def _write_summary_md(doc_dir: Path, body: str, doc_id: str) -> None:
     dest = (doc_dir / "summary.md").resolve()
     tmp = dest.with_suffix(dest.suffix + ".tmp")
     tmp.write_text(body + build_footer(doc_id), encoding="utf-8")
-    tmp.replace(dest)
+    paths.atomic_replace(tmp, dest)
 
 
 # ----------------------------------------------------------------------

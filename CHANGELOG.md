@@ -1,5 +1,46 @@
 # 版本历史
 
+## [0.2.0] — 2026-09-23
+
+**一项主题：Windows 兼容（ADR-016）。无 breaking change** —— CLI 命令、产物格式、
+回程票的机器可读段、`~/.course-digest/` 既有内容全部不变；macOS 行为零变化。
+
+### 支持平台：macOS → macOS + Windows
+
+v0.1.x 的代码底子（pathlib、`Path.home()`、`webbrowser`、子进程 detached 分支、显式 UTF-8 文件 IO）
+本来就近跨平台，这次只修真正会坏掉的五个点：
+
+1. **`_pid_alive` 地雷拆除**：Windows 上 `os.kill(pid, 0)` 不是探活，而是
+   `TerminateProcess(pid, 0)` —— 会把目标进程**真的杀掉**。拆成 `_pid_alive_posix`
+   （原逻辑不动）与 `_pid_alive_windows`（`tasklist` 只读查询，按 `"<pid>"` 精确匹配）。
+   `stop()` 的终止在 Windows 上语义为 TerminateProcess（硬杀；本地 HTTP 服务无状态，安全），
+   轮询间隔放宽到 0.5s（tasklist 子进程不便宜）。
+2. **CLI stdout/stderr 强制 UTF-8**：中文 Windows 管道输出默认跟随 locale（cp936），
+   footer 里的 📄、stderr 里的 →/… 会直接 `UnicodeEncodeError`，破坏 agent 依赖的
+   stdout 契约。入口统一 `reconfigure(encoding="utf-8", errors="replace")`。
+3. **展示命令按平台给**：Windows 没有 `python3`（常是 Store 占位假命令）。回程票人读段、
+   报错提示里的命令前缀改为按平台取 `python3`（posix）/ `python`（nt）；
+   机器可读段（docId 注释）两平台完全一致。真正起子进程仍一律 `sys.executable`。
+4. **原子写抗文件锁**：Windows 上 `replace` 一个正被读取的目标文件会 `PermissionError`
+   （macOS 不会）。新增 `paths.atomic_replace`（3 次 × 0.1s 短重试），
+   publish / simplify 的四处 tmp→目标 替换统一走它。
+5. **mimetypes 补 `.html`/`.htm`**：Windows 上 mimetypes 会读注册表，个别机器把 .html
+   登记成奇怪类型 → SPA 入口被发错 Content-Type 白屏。显式登记压住。
+
+### 明确不做（诚实降级）
+
+- **视觉补丁保持 macOS-only**：渲染工具 `tools/pdfrender.swift` 依赖 PDFKit + swiftc。
+  Windows 上按纯文本层写总结并注明「未做视觉补丁」—— 不为渲染引入 PyMuPDF 之类依赖，
+  零依赖原则不破（`references/visual-patch.md` 已标注边界）。
+- Linux 未测：路径与 macOS 同源，理论可用，但不承诺。
+
+### 不变的事
+
+- CLI 命令、stdout/stderr 契约、产物格式（summary.md / page-map.json / meta.json / simplified.pdf）
+- 回程票的机器可读注释格式（`<!-- course-digest: docId=... -->`）—— 老文档的票依然有效
+- `~/.course-digest/` 数据目录语义（Windows 上即 `C:\Users\<用户名>\.course-digest\`）
+- 三套测试基线全部保留，另补 Windows 分支的纯逻辑测试（platform mock，macOS 上也能跑）
+
 ## [0.1.3] — 2026-09-23
 
 **四项改动：一项纯文档（写总结的风格偏好升硬约定）+ 一项前端交互新增（联动改双向）+ 一项新 API 端点（编辑器保存的后端链路）+ 一项前端新增（页面上的 MD 编辑器）。无 breaking change** —— 命令、产物格式、`~/.course-digest/` 既有内容都不变。

@@ -17,10 +17,18 @@ description: 课件总结：把 PDF 课件压成带页锚点的 Markdown 总结�
 
 ## 前置
 
-- macOS（MVP 只保证 macOS）；Python 3.10+（`str | None` 注解在 3.10 才允许运行时求值）
+- **macOS 或 Windows**（v0.2.0 起；Linux 未测但理论上同 macOS 路径）；
+  Python 3.10+（`str | None` 注解在 3.10 才允许运行时求值）
 - **零额外依赖**：`pypdf` 与前端库（PDF.js / marked / KaTeX / highlight.js）都已 vendor 在本仓库
 - 下文命令都在**本 skill 的根目录（即本 `SKILL.md` 所在目录）**执行；
   `python3 -m course_digest ...` 指的是这个目录下的包，不在这个目录跑会报 `No module named course_digest`
+- **Windows 差异**（ADR-016）：
+  - 命令前缀换成 `python -m course_digest ...`（Windows 没有 `python3`；
+    `py -m course_digest ...` 也行）
+  - 用户数据在 `C:\Users\<用户名>\.course-digest\`（仍是 `~/.course-digest` 的展开）
+  - **视觉补丁不可用**（渲染工具 `tools/pdfrender.swift` 需要 macOS 的 swiftc）：
+    图密集型课件按纯文本层写总结，并在总结里注明「未做视觉补丁，图内细节请核对原文」
+  - CLI 的 stdout/stderr 已强制 UTF-8，agent 直接解析即可，不用管控制台代码页
 
 ## 四步执行链
 

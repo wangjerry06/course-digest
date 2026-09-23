@@ -16,12 +16,24 @@
 
 ## 环境
 
-- **macOS**（MVP 只保证 macOS；Windows 明确不做）
+- **macOS / Windows**（v0.2.0 起双平台支持，ADR-016；Linux 未测但路径与 macOS 同源）
 - **Python 3.10+**（代码里用了 `str | None` 这类注解，运行时求值需要 3.10；本机实测 3.13），
   **零额外依赖** —— `pypdf`、PDF.js、marked、KaTeX、highlight.js 都已随仓库本地化，断网可用
 - **用**这个工具不需要 Node / 构建工具 / 数据库。
   （只有想跑 `tests/frontend_test.js` 那套前端纯逻辑测试时才需要 Node 18+，且它零依赖；
   不想跑也无妨，不影响使用与 `SKILL.md` 那条链路。）
+
+### Windows 差异速查
+
+| 项 | macOS | Windows |
+|---|---|---|
+| 命令前缀 | `python3 -m course_digest ...` | `python -m course_digest ...`（或 `py -m ...`） |
+| 数据目录 | `~/.course-digest/` | `C:\Users\<用户名>\.course-digest\` |
+| 视觉补丁（看图写图密集课件） | ✅ `tools/pdfrender.swift` | ❌ 暂不可用，按文本层写（`references/visual-patch.md`） |
+| `stop` 停服务 | 优雅 SIGTERM | 直接终止进程（本地服务无状态，安全） |
+
+其余命令、产物、回程票格式两个平台完全一致；CLI 输出统一 UTF-8，
+agent 解析不受 Windows 控制台代码页影响。
 
 ## 安装
 
