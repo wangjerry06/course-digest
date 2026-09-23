@@ -154,7 +154,7 @@ python3 -m course_digest open ~/Downloads/我的课程总结.md
 
 ## 版本历史
 
-见 [`CHANGELOG.md`](./CHANGELOG.md)（当前 **v0.1.1** — 无 breaking change）。
+见 [`CHANGELOG.md`](./CHANGELOG.md)（当前 **v0.1.2** — 无 breaking change）。
 
 ## 许可证
 
