@@ -366,12 +366,29 @@ def run(args) -> int:
 # ----------------------------------------------------------------------
 
 def open_doc(args) -> int:
+    # 参数可以是 docId，也可以是**下载到本地的 summary.md 路径**（ADR-015 的配套：
+    # 没有这条，回程票是死的）。只认注释内容，不要求文件名叫 summary.md ——
+    # 用户下载后随便改名都能开。
+    raw = args.target
+    path = Path(raw).expanduser()
+    if path.is_file() and path.suffix.lower() == ".md":
+        doc_id = parse_footer_doc_id(path.read_text(encoding="utf-8"))
+        if doc_id is None:
+            return _fail(
+                "该 md 没有 course-digest 回程票（不是本工具生成的，或 footer 已被删）"
+            )
+    elif path.suffix.lower() == ".md" or path.parent != Path("."):
+        # 看着像路径但不是（存在的）md 文件：给一句人话，别退化成「invalid docId」
+        return _fail(f"文件不存在：{path}")
+    else:
+        doc_id = raw
+
     try:
-        doc_dir = paths.doc_dir(args.doc_id)
+        doc_dir = paths.doc_dir(doc_id)
     except ValueError as exc:
         return _fail(str(exc))
     if not doc_dir.is_dir():
-        return _fail(f"doc not found: {args.doc_id}")
+        return _fail(f"doc not found: {doc_id}")
 
     # 不重新生成任何东西，只确认该有的都在
     missing = [
@@ -382,14 +399,14 @@ def open_doc(args) -> int:
     if missing:
         return _fail(
             f"文档尚未 publish（缺 {', '.join(missing)}）；先跑 "
-            f"publish {args.doc_id} --summary <md路径>"
+            f"publish {doc_id} --summary <md路径>"
         )
 
     try:
         port = serve.ensure_server()
     except RuntimeError as exc:
         return _fail(str(exc))
-    url = serve.open_browser(args.doc_id, port)
+    url = serve.open_browser(doc_id, port)
     print(url)
     return 0
 

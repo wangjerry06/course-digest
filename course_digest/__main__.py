@@ -74,7 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_publish.set_defaults(func=publish.run)
 
     p_open = sub.add_parser("open", help="打开已有文档（ensure server + 开浏览器，不重新生成）")
-    p_open.add_argument("doc_id", help="已 publish 的 docId")
+    p_open.add_argument(
+        "target",
+        metavar="docId|md路径",
+        help="已 publish 的 docId，或 summary.md 文件路径",
+    )
     p_open.set_defaults(func=publish.open_doc)
 
     p_list = sub.add_parser("list", help="列出文档库（纯文件操作，不起服务）")

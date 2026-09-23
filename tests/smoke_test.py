@@ -139,6 +139,20 @@ def publish_md(doc_id: str, md_text: str, tmp: Path, summary_path=None):
     return rc, out.getvalue(), err.getvalue(), src
 
 
+def open_target(target):
+    """跑一次 open（把 serve 换成假的）。返回 (rc, stdout, stderr)。"""
+    saved = (serve.ensure_server, serve.open_browser)
+    serve.ensure_server = lambda: 12345
+    serve.open_browser = lambda d, p: f"http://127.0.0.1:{p}/doc/{d}"
+    try:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = publish.open_doc(SimpleNamespace(target=str(target)))
+    finally:
+        serve.ensure_server, serve.open_browser = saved
+    return rc, out.getvalue(), err.getvalue()
+
+
 def main():
     # slugify 规则
     check("slug lower+hyphen", slugify("Lecture-02 C++ FUNDAMENTALS") == "lecture-02-c-fundamentals")
@@ -687,6 +701,64 @@ def main():
             check("publish 边界: footer 半截时仍能 publish", rc2 == 0)
             check("publish 边界: footer 半截时补回完整票",
                   publish.parse_footer_doc_id(_dest.read_text(encoding="utf-8")) == "pad1")
+
+            # --- open：支持传 summary.md 路径（ADR-015 的配套）---
+            rc, out, err = open_target("pad1")
+            check("open(docId): 原逻辑不变，rc == 0 且输出 URL",
+                  rc == 0 and out.strip() == "http://127.0.0.1:12345/doc/pad1")
+
+            # 下载到本地：落盘的 summary.md 拷走并**随便改名**
+            _downloaded = _tmp / "我的总结-随便改的名字.md"
+            _downloaded.write_text(_dest.read_text(encoding="utf-8"), encoding="utf-8")
+            check("open: 下载件确实不叫 summary.md", _downloaded.name != "summary.md")
+            rc, out, err = open_target(_downloaded)
+            check("open(md 路径): 解析回程票 → 一条命令打开原文档",
+                  rc == 0 and out.strip() == "http://127.0.0.1:12345/doc/pad1")
+
+            # 无票的 md → 明确报错，rc=1，stdout 只输出错误（这里为空）
+            _plain = _tmp / "no-ticket.md"
+            _plain.write_text("# 只是普通 md\n\n没有回程票\n", encoding="utf-8")
+            rc, out, err = open_target(_plain)
+            check("open(无票 md): rc == 1", rc == 1)
+            check("open(无票 md): stdout 为空", out == "")
+            check("open(无票 md): 报错点明「没有回程票」",
+                  err.startswith("error: ") and "回程票" in err)
+
+            # 票里的 docId 指向不存在的文档 → doc not found（不是把它当文件路径）
+            _ghost = _tmp / "ghost.md"
+            _ghost.write_text("# x\n" + publish.build_footer("no-such-doc"), encoding="utf-8")
+            rc, out, err = open_target(_ghost)
+            check("open(票指向不存在的 docId): rc == 1 且 doc not found",
+                  rc == 1 and "doc not found: no-such-doc" in err)
+
+            # 看着像路径但不是（存在的）md 文件 → 人话报错，不退化成 invalid docId
+            rc, out, err = open_target(_tmp / "nope.md")
+            check("open(不存在的相对 md 路径): 报「文件不存在」",
+                  rc == 1 and "文件不存在" in err)
+            rc, out, err = open_target("/tmp/no/such/dir/file.md")
+            check("open(不存在的绝对 md 路径): 报「文件不存在」",
+                  rc == 1 and "文件不存在" in err)
+
+            # 原逻辑不变：不存在的 docId
+            rc, out, err = open_target("no-such-doc")
+            check("open(不存在的 docId): rc == 1 且 doc not found",
+                  rc == 1 and "doc not found: no-such-doc" in err)
+
+            # 未 publish 的文档 → 提示先 publish
+            make_publishable_doc(paths.DOCS_DIR, "bare1", 1)
+            rc, out, err = open_target("bare1")
+            check("open(未 publish 的 doc): rc == 1 且提示先 publish",
+                  rc == 1 and "尚未 publish" in err)
+
+            # --- 冻结契约：9 个子命令的 --help 仍全部可用 ---
+            for _cmd in ("import", "extract", "simplify", "text", "publish",
+                         "open", "list", "serve", "stop"):
+                with contextlib.redirect_stdout(io.StringIO()), \
+                        contextlib.redirect_stderr(io.StringIO()):
+                    _helped = raises(SystemExit, cli.main, [_cmd, "--help"])
+                check(f"--help 可用：{_cmd}", _helped)
+            _open_ns = cli.build_parser().parse_args(["open", "some-doc"])
+            check("open: 位置参数名改为 target", hasattr(_open_ns, "target"))
 
             # 反向：坏锚点必须中止，且产物一字未动
             _dest.write_text(_md + publish.build_footer("pad1"), encoding="utf-8")
