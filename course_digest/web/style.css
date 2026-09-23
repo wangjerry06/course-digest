@@ -5,6 +5,11 @@
 
 * { box-sizing: border-box; }
 
+:root {
+  /* 品牌色：悬停高亮、段首 ▸ 等都用它，改一处全跟（ADR-016 的「主题色变就跟着变」） */
+  --accent: #0066cc;
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -201,6 +206,28 @@ button:active { background: #e6e6e9; }
 /* 段落可点：提示这是联动入口 */
 #md [data-pages] { cursor: pointer; }
 #md [data-pages]:hover { background: #f0f7ff; }
+
+/* 段首 ▸ —— 可点击的**主信号**是它，不是气泡（ADR-016：发现性问题）。
+   用绝对定位挂在内容左侧的 padding 区里（14px < #md 的 24px 左内边距）：
+   既不引起重排，也不会在字号调到 24px 时被挤出容器。
+   表格 / 代码块本身就是 [data-pages] 元素，这条通用选择器一起覆盖，零额外代码。 */
+#md [data-pages] { position: relative; }
+#md [data-pages]::before {
+  content: "▸";
+  position: absolute;
+  left: -14px;
+  top: 0;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity .15s;
+  pointer-events: none;      /* 别抢点击 —— 点击要落到 [data-pages] 自己身上 */
+}
+#md [data-pages]:hover::before { opacity: .6; }
+
+/* 触摸设备没有 hover：▸ 常显，发现性不丢（ADR-016） */
+@media (hover: none) {
+  #md [data-pages]::before { opacity: .4; }
+}
 
 /* 「此处略过原 PX–PY」提示条（ADR-013 信任要求） */
 .skipped-banner {

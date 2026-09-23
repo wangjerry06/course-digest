@@ -136,6 +136,27 @@ function parsePages(el) {
     .filter((n) => Number.isInteger(n) && n > 0);
 }
 
+/* 悬停气泡的文案。取首尾而不是原样拼接 —— 锚点写成 "5,6,7" 时
+   应该显示「第 5–7 页」而不是「第 5,6,7 页」。用 min/max 顺带兜住
+   万一写成乱序（如 "6,5"）时出现「第 6–5 页」这种读不通的文案。 */
+function anchorTooltip(pages) {
+  if (!pages.length) return '';
+  const first = Math.min(...pages);
+  const last = Math.max(...pages);
+  return first === last
+    ? `点击跳转到第 ${first} 页`
+    : `点击跳转到第 ${first}–${last} 页`;
+}
+
+/* 给所有可点元素挂原生 title 气泡（ADR-016：零依赖 + 可访问性天然满足，
+   不自己画 tooltip）。表格 / 代码块本身就是 [data-pages] 元素，一起覆盖。 */
+function annotateAnchors(root) {
+  for (const el of root.querySelectorAll('[data-pages]')) {
+    const tip = anchorTooltip(parsePages(el));
+    if (tip) el.title = tip;
+  }
+}
+
 /* 三级回退规则（§三）：返回 {orig, rule}
  *   1. 第一个页号之后（含）最近的保留页
  *   2. 没有 → 之前最近的保留页
@@ -258,6 +279,7 @@ function renderMarkdown() {
   article.innerHTML = window.marked.parse(state.data.summary_md || '', { gfm: true });
 
   attachAnchors(article);
+  annotateAnchors(article);       // 挂「点击跳转到第 N 页」气泡（ADR-016）
 
   // 顺序：先 hljs（只认 <pre><code>），再 KaTeX（会插入自己的 DOM）
   article.querySelectorAll('pre code').forEach((block) => {

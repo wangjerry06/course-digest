@@ -134,6 +134,102 @@ check('parsePages: 没有 data-pages → 空数组', eq(parsePages({ dataset: {}
 check('parsePages: 过滤 NaN / 0 / 负数',
   eq(parsePages({ dataset: { pages: '5,x,-1,0,7' } }), [5, 7]));
 
+/* ------------------------------------------------------------------ *
+ * 锚点提示：文案 + 挂载（ADR-016）
+ * ------------------------------------------------------------------ */
+
+const anchorTooltip = load('anchorTooltip');
+check('anchorTooltip: 单页', anchorTooltip([5]) === '点击跳转到第 5 页');
+check('anchorTooltip: 多页取首尾', anchorTooltip([5, 6]) === '点击跳转到第 5–6 页');
+check('anchorTooltip: 三页以上也只写首尾',
+  anchorTooltip([5, 6, 7]) === '点击跳转到第 5–7 页');
+check('anchorTooltip: 乱序不会写出「第 6–5 页」',
+  anchorTooltip([6, 5]) === '点击跳转到第 5–6 页');
+check('anchorTooltip: 空数组 → 空串（不写 title）', anchorTooltip([]) === '');
+
+const annotateAnchors = load('annotateAnchors', { parsePages, anchorTooltip });
+const els = [
+  { dataset: { pages: '5,6' }, title: '' },
+  { dataset: { pages: '3' }, title: '' },
+  { dataset: {}, title: '' },
+  { dataset: { pages: '0,x' }, title: '' },
+];
+annotateAnchors({ querySelectorAll: () => els });
+check('annotateAnchors: 多页元素写上 title',
+  els[0].title === '点击跳转到第 5–6 页');
+check('annotateAnchors: 单页元素写上 title', els[1].title === '点击跳转到第 3 页');
+check('annotateAnchors: 没有 data-pages → 不动 title', els[2].title === '');
+check('annotateAnchors: 页号全非法 → 不动 title', els[3].title === '');
+
+/* ------------------------------------------------------------------ *
+ * CSS 静态检查：段首 ▸（视觉发现的主信号）+ 触摸设备常显分支
+ * ------------------------------------------------------------------ */
+
+const CSS = fs.readFileSync(
+  path.join(__dirname, '..', 'course_digest', 'web', 'style.css'), 'utf8');
+
+check('style.css: 有 #md [data-pages]::before 规则',
+  /#md \[data-pages\]::before\s*\{/.test(CSS));
+check('style.css: ▸ 默认透明（不打扰阅读）',
+  /#md \[data-pages\]::before\s*\{[^}]*opacity:\s*0[;\s]/.test(CSS));
+check('style.css: 悬停时显形',
+  /#md \[data-pages\]:hover::before\s*\{[^}]*opacity:\s*\.6/.test(CSS));
+check('style.css: 触摸设备（无 hover）常显分支存在',
+  /@media \(hover:\s*none\)\s*\{[^}]*#md \[data-pages\]::before/.test(CSS));
+check('style.css: ▸ 用 --accent 变量（主题色变就跟着变）',
+  /#md \[data-pages\]::before\s*\{[^}]*var\(--accent\)/.test(CSS));
+check('style.css: :root 定义了 --accent',
+  /:root\s*\{[^}]*--accent:/.test(CSS));
+check('style.css: ▸ 不吃鼠标事件（点击要落到段落上）',
+  /#md \[data-pages\]::before\s*\{[^}]*pointer-events:\s*none/.test(CSS));
+
+/* 几何不变量（比截图更靠谱：这是一条能长期跑的断言，不靠人眼看）——
+   ▸ 是「悬挂」在左边距里的，悬挂距离必须**小于 #md 的左内边距**，否则它会跑出
+   #md 的 border box，被 #md-scroll 的 overflow:auto 裁掉或挤出横向滚动条。
+   写成 px 而不是 em 也是刻意的：字号调到 24px 时 em 会跟着变大到 28.8px → 越界。 */
+const hanging = Number(
+  (CSS.match(/#md \[data-pages\]::before\s*\{[^}]*left:\s*-(\d+(?:\.\d+)?)px/) || [])[1]);
+const mdPadShorthand =
+  (CSS.match(/#md\s*\{[^}]*padding:\s*([\d.]+)px\s+([\d.]+)px/) || []);
+const padLeft = Number(mdPadShorthand[2]);
+
+check('几何: 解析得到 ▸ 悬挂距离（px）', Number.isFinite(hanging));
+check('几何: 解析得到 #md 的左内边距', Number.isFinite(padLeft));
+check(`几何: ▸ 悬挂 ${hanging}px < #md 左内边距 ${padLeft}px → 不会被裁掉`,
+  hanging < padLeft);
+
+/* ------------------------------------------------------------------ *
+ * 用**真渲染器**（vendored marked）验证「锚点注释后面紧跟的是哪个元素」。
+ * 前端靠 nextElementAfter() 找宿主元素；表格 / 代码块能不能被标上 data-pages
+ * 完全取决于这一步（坑 #10：引导句 + 空行 + 表格是两个块，表格前必须再补一行锚点）。
+ * ------------------------------------------------------------------ */
+
+const marked = require(path.join(
+  __dirname, '..', 'course_digest', 'web', 'vendor', 'marked', 'marked.umd.js'));
+
+const sampleMd = [
+  '<!-- pages: 5 -->', '', '一段普通正文', '',
+  '<!-- pages: 6 -->', '', '| A | B |', '| --- | --- |', '| 1 | 2 |', '',
+  '<!-- pages: 7 -->', '', '```cpp', 'int main() { return 0; }', '```', '',
+  '<!-- pages: 8 -->', '', '## 一个小节', '',
+].join('\n');
+
+const sampleHtml = marked.parse(sampleMd, { gfm: true });
+const hosts = [...sampleHtml.matchAll(/<!-- pages: (\d+) -->\s*(<[a-z0-9]+)/g)]
+  .map((m) => [m[1], m[2]]);
+
+check('marked: 锚点注释原样保留（不转义、不吞掉）',
+  sampleHtml.includes('<!-- pages: 8 -->'));
+check('marked: 锚点数量与输入一致', hosts.length === 4);
+check('marked: 正文前的锚点 → 落在 <p>', eq(hosts[0], ['5', '<p']));
+check('marked: 表格前的锚点 → 落在 <table>（坑 #10）', eq(hosts[1], ['6', '<table']));
+check('marked: 代码块前的锚点 → 落在 <pre>', eq(hosts[2], ['7', '<pre']));
+
+check('style.css: ▸ 通用选择器能覆盖表格（不写死 p）',
+  !/#md p\[data-pages\]/.test(CSS) && /#md \[data-pages\]/.test(CSS));
+
+/* index.html 的按钮接线在 http_test.py 里查（那边本来就在做静态资产检查） */
+
 if (failed) {
   console.error(`\n${failed} 条失败`);
   process.exit(1);
