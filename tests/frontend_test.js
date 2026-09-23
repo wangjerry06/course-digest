@@ -307,8 +307,11 @@ check('app.js: 拖动结束会重算 PDF 布局（否则留着旧宽度）',
    注意要**在函数体里**找调用点并按调用位置断言：只在整个文件里搜字符串的话，
    调用被挪出渲染路径（比如挪出 renderMarkdown）测试照样绿。 */
 const renderMarkdownSrc = extract('renderMarkdown');
-check('app.js: renderMarkdown() 里真的调用了 annotateAnchors()',
-  /annotateAnchors\(article\);/.test(renderMarkdownSrc));
+/* 渲染链已经抽成查看区/预览区共用的 renderRichMarkdown：
+   这条断言从「renderMarkdown 里调了 annotateAnchors」改成「renderMarkdown 走的是那条共用链」，
+   四件事（锚点 / 气泡 / 高亮 / 公式）的断言落在扩展后的渲染链上，见下面的编辑器一节。 */
+check('app.js: renderMarkdown() 走**共用**渲染链，不自己再拼一套',
+  /renderRichMarkdown\(\$\('#md'\), state\.data\.summary_md/.test(renderMarkdownSrc));
 check('app.js: main() 里真的调用了 renderMarkdown()',
   /^\s*renderMarkdown\(\);/m.test(SRC));
 check('app.js: main() 里真的调用了 initSplitDrag()',
@@ -897,30 +900,92 @@ check('editorInit: 标着未保存但没有草稿 → 退回已保存正文（�
 check('editorInit: 都为空 → 空串', editorInitialText('', null, false) === '');
 check('editorInit: summary_md 缺失 → 空串（不抛）', editorInitialText(undefined, null, false) === '');
 
-/* —— 预览 HTML（只跑 marked） —— */
+/* —— 渲染链 renderRichMarkdown（查看区与预览区**共用**） ——
+   用假 container + 假 window 把它真跑一遍：四件事（marked / 锚点 / 高亮 / 公式）
+   都做了、顺序对、边界不崩。比只测「返回了一段 HTML」强得多 ——
+   「渲染链分叉」正是本批最怕的退化形态（预览与查看长得不一样 = 预览在骗人）。 */
 
-let previewSeen = null;
-let previewCalls = 0;
-const fakePreviewWindow = {
-  marked: {
-    parse: (src, opts) => {
-      previewCalls += 1;
-      previewSeen = [src, opts];
-      return '<p>' + src + '</p>';
+function richPipeline(opts = {}) {
+  const calls = [];
+  const state = {};
+  const container = {
+    innerHTML: '',
+    querySelectorAll: (sel) => {
+      calls.push('querySelectorAll:' + sel);
+      return sel === 'pre code' ? (opts.blocks || []) : [];
     },
-  },
-};
-const previewHtml = load('previewHtml', { window: fakePreviewWindow });
+  };
+  const win = {
+    marked: {
+      parse: (src, o) => { calls.push('marked'); state.markedSrc = src; state.markedOpts = o; return '<p>' + src + '</p>'; },
+    },
+    hljs: { highlightElement: () => { calls.push('hljs'); } },
+  };
+  if (!opts.noMath) win.renderMathInElement = () => { calls.push('math'); };
 
-check('previewHtml: 用 marked 渲染，且 gfm: true（与查看区同一条渲染路径）',
-  previewHtml('# 标题') === '<p># 标题</p>' && previewSeen[1].gfm === true);
-check('previewHtml: 把原文原样交给 marked（不做任何预处理）', previewSeen[0] === '# 标题');
-check('previewHtml: 空串照常渲染（返回 marked 的结果，不短路）',
-  previewHtml('') === '<p></p>');
-check('previewHtml: null 当空串处理', previewHtml(null) === '<p></p>');
-previewCalls = 0;
-previewHtml('再调一次');
-check('previewHtml: 每次只调一次 marked.parse（不跑高亮 / 公式 / 锚点）', previewCalls === 1);
+  const fn = load('renderRichMarkdown', {
+    window: win,
+    attachAnchors: () => { calls.push('anchors'); },
+    annotateAnchors: () => { calls.push('tooltips'); },
+  });
+  return { fn, container, calls, state };
+}
+
+const rich = richPipeline({ blocks: [{}] });
+rich.fn(rich.container, '<!-- pages: 1 -->\n正文');
+check('渲染链: marked 的结果落进 container.innerHTML',
+  rich.container.innerHTML === '<p><!-- pages: 1 -->\n正文</p>');
+check('渲染链: 把 gfm: true 交给 marked（与查看区同一套解析口径）',
+  rich.state.markedOpts && rich.state.markedOpts.gfm === true);
+check('渲染链: 原文原样交给 marked（不做预处理）',
+  rich.state.markedSrc === '<!-- pages: 1 -->\n正文');
+check('渲染链: 做了锚点（data-pages）', rich.calls.includes('anchors'));
+check('渲染链: 挂了「点击跳转到第 N 页」悬停气泡', rich.calls.includes('tooltips'));
+check('渲染链: 代码块跑了语法高亮', rich.calls.filter((c) => c === 'hljs').length === 1);
+check('渲染链: 跑了公式渲染（KaTeX）', rich.calls.includes('math'));
+check('渲染链: 顺序是「先高亮、后公式」（KaTeX 会插入自己的 DOM）',
+  rich.calls.indexOf('hljs') < rich.calls.indexOf('math'));
+check('渲染链: 高亮只认 pre code（不误伤别处）',
+  rich.calls.includes('querySelectorAll:pre code'));
+check('渲染链: 没有代码块就不调 hljs（空转没意义）',
+  richPipeline().calls.filter((c) => c === 'hljs').length === 0);
+
+/* 边界：KaTeX 脚本没加载（window.renderMathInElement 不存在）→ 不许抛，别的事照做 */
+const noMath = richPipeline({ noMath: true, blocks: [{}] });
+let mathThrew = false;
+try { noMath.fn(noMath.container, '正文'); } catch (e) { mathThrew = true; }
+check('渲染链: KaTeX 未加载时不抛，锚点与高亮照常',
+  !mathThrew && noMath.calls.includes('anchors') && noMath.calls.includes('hljs'));
+check('渲染链: KaTeX 未加载时不硬调它', !noMath.calls.includes('math'));
+
+/* 边界：null / undefined / 空串 → 交给 marked 的是空串 */
+const emptyRich = richPipeline();
+emptyRich.fn(emptyRich.container, null);
+check('渲染链: null 当空串（不吐 "null" 到页面上）',
+  emptyRich.container.innerHTML === '<p></p>');
+const undefRich = richPipeline();
+undefRich.fn(undefRich.container, undefined);
+check('渲染链: undefined 同样当空串', undefRich.container.innerHTML === '<p></p>');
+
+/* 反向：某个代码块高亮抛异常，不能把整条链带崩（正文不能因为高亮失败就消失） */
+const boomCalls = [];
+let warns = 0;
+const boomContainer = { innerHTML: '', querySelectorAll: () => [{}] };
+const boomFn = load('renderRichMarkdown', {
+  window: {
+    marked: { parse: () => '<p>x</p>' },
+    hljs: { highlightElement: () => { throw new Error('boom'); } },
+    renderMathInElement: () => { boomCalls.push('math'); },
+  },
+  attachAnchors: () => { boomCalls.push('anchors'); },
+  annotateAnchors: () => { boomCalls.push('tooltips'); },
+  console: { warn: () => { warns += 1; } },   // 注入 console：既断言「有报」，也不让测试日志变脏
+});
+let boomThrew = false;
+try { boomFn(boomContainer, 'x'); } catch (e) { boomThrew = true; }
+check('渲染链: 高亮失败不中断（公式照样渲染）',
+  !boomThrew && boomCalls.includes('math') && boomCalls.includes('anchors'));
+check('渲染链: 高亮失败会 console.warn 报一声（不静默吞掉）', warns === 1);
 
 /* —— 超长草稿提醒 —— */
 
@@ -962,9 +1027,37 @@ const cancelSrc = extract('cancelEditorDraft');
 const toolbarActionSrc = extract('applyToolbarAction');
 const inputSrc = extract('onEditorInput');
 const previewRefreshSrc = extract('refreshEditorPreview');
+const previewScheduleSrc = extract('scheduleEditorPreview');
 const writeSrc = extract('writeTextarea');
 const showErrSrc = extract('showEditorErrors');
 const statusSrc = extract('refreshEditorStatus');
+
+/* —— 预览重渲的防抖（行为测：连敲三下只该渲一次） —— */
+
+const previewDebounceMs = Number((SRC.match(/const PREVIEW_DEBOUNCE_MS\s*=\s*(\d+)/) || [])[1]);
+check('防抖: 窗口常量能被解析出来（150ms）', previewDebounceMs === 150);
+
+let previewRenders = 0;
+let pendingTimer = null;
+const scheduleEditorPreview = load('scheduleEditorPreview', {
+  PREVIEW_DEBOUNCE_MS: previewDebounceMs,
+  refreshEditorPreview: () => { previewRenders += 1; },
+  setTimeout: (fn, ms) => { pendingTimer = { fn, ms }; return 1; },
+  clearTimeout: () => { pendingTimer = null; },
+  previewTimer: null,          // 模块级句柄：与既有 setMdStatus / statusRetry 的测法一致
+});
+scheduleEditorPreview();
+scheduleEditorPreview();
+scheduleEditorPreview();
+check('防抖: 连敲三下只留一个待执行回调，且窗口 = PREVIEW_DEBOUNCE_MS',
+  pendingTimer !== null && pendingTimer.ms === previewDebounceMs);
+pendingTimer.fn();
+check('防抖: 到点只渲染一次（不是三次）', previewRenders === 1);
+check('防抖: 每次都先把上一个定时器清掉（不叠加）',
+  /clearTimeout\(previewTimer\)/.test(previewScheduleSrc)
+  && /setTimeout\(refreshEditorPreview, PREVIEW_DEBOUNCE_MS\)/.test(previewScheduleSrc));
+check('防抖: 离开编辑模式时把待执行的预览渲染清掉（别为看不见的面板白渲）',
+  /clearTimeout\(previewTimer\)/.test(renderViewSrc));
 
 check('index.html: 顶栏有 查看/编辑 分段，且排在 简化版/完整版 之前',
   /class="segmented" id="mode-switch" role="group" aria-label="模式"/.test(HTML)
@@ -1035,8 +1128,8 @@ check('app.js: 取消 = 先问再丢草稿（未保存时不能静默丢）',
 
 check('app.js: 工具栏与键盘共用一条回写路径（回写后派发 input）',
   /dispatchEvent\(new Event\('input'\)\)/.test(writeSrc));
-check('app.js: 每次输入都标脏 + 刷预览 / 计数 / 状态条',
-  /state\.hasUnsaved = true;/.test(inputSrc) && /refreshEditorPreview\(\);/.test(inputSrc)
+check('app.js: 每次输入都标脏 + 刷预览（防抖）/ 计数 / 状态条',
+  /state\.hasUnsaved = true;/.test(inputSrc) && /scheduleEditorPreview\(\);/.test(inputSrc)
   && /refreshEditorCounter\(\);/.test(inputSrc) && /refreshEditorStatus\(null\);/.test(inputSrc));
 check('app.js: 工具栏插入走 insertAtCursorText 纯函数',
   /insertAtCursorText\(/.test(toolbarActionSrc) && /insertListMarker\(/.test(toolbarActionSrc));
@@ -1047,10 +1140,17 @@ check('app.js: 锚点页号越界当场拦下（不留给服务端 400）',
   /anchorComment\(raw, ceiling\)/.test(toolbarActionSrc));
 check('app.js: 未知工具栏动作一个字都不动', /if \(!snippet\) return;/.test(toolbarActionSrc));
 
-check('app.js: 预览区只写 innerHTML，且只走 previewHtml',
-  /preview\.innerHTML = previewHtml\(ta\.value\)/.test(previewRefreshSrc));
-check('app.js: 预览区不挂锚点、不绑事件、不跑高亮与公式（只读视觉确认）',
-  !/attachAnchors|annotateAnchors|addEventListener|hljs|renderMathInElement/.test(previewRefreshSrc));
+/* 预览区必须与查看区**同一条渲染链**。这一条是本批最容易被改回去的东西：
+   只要有人图省事把预览换回 `innerHTML = marked.parse(...)`，编辑时看到的东西
+   就和保存后看到的不一样了 —— 预览当场变成谎话。 */
+check('app.js: 预览区走**共用**渲染链（不是自己再拼一份 marked）',
+  /renderRichMarkdown\(preview, ta\.value\)/.test(previewRefreshSrc));
+check('app.js: 预览区没有再退回「只跑 marked」的老写法',
+  !/preview\.innerHTML\s*=/.test(previewRefreshSrc) && !/previewHtml/.test(SRC));
+check('app.js: 预览区带锚点与跳转（点锚点也跳 PDF，与查看区一致）',
+  /'#md-preview'\)\.addEventListener\('click', onMdClick\)/.test(initEditorSrc));
+check('app.js: 高亮会同时清掉查看区与预览区（不留两处同时亮着）',
+  /#md \.md-active, #md-preview \.md-active/.test(extract('highlightMd')));
 
 check('app.js: 保存 POST 到 /api/doc/<id>/summary（docId 过 encodeURIComponent）',
   /method: 'POST'/.test(saveSrc)
@@ -1106,6 +1206,36 @@ check('style.css: 保存按钮用品牌色 --accent',
   /#md-save\s*\{[^}]*var\(--accent\)/.test(CSS));
 check('style.css: ≤900px 编辑区也改上下叠（触摸设备的主战场）',
   /@media \(max-width:\s*900px\)[\s\S]*?\.md-split\s*\{[^}]*grid-template-columns:\s*1fr[^}]*grid-template-rows/.test(CSS));
+
+/* —— 预览区的锚点标记：必须与查看区一个观感（两边共用渲染链，样式也得跟上） —— */
+
+check('style.css: 预览区也有 ▸ 锚点标记（不是「一边有一边没有」）',
+  /\.md-preview \[data-pages\]::before\s*\{[^}]*content:\s*"▸"/.test(CSS));
+check('style.css: 预览区 ▸ 默认透明、悬停显形（与查看区同一套反馈）',
+  /\.md-preview \[data-pages\]::before\s*\{[^}]*opacity:\s*0[;\s]/.test(CSS)
+  && /\.md-preview \[data-pages\]:hover::before\s*\{[^}]*opacity:\s*\.6/.test(CSS));
+check('style.css: 预览区锚点光标是手型',
+  /\.md-preview \[data-pages\]\s*\{[^}]*cursor:\s*pointer/.test(CSS));
+check('style.css: 预览区 ▸ 用 --accent 主题色',
+  /\.md-preview \[data-pages\]::before\s*\{[^}]*var\(--accent\)/.test(CSS));
+check('style.css: 预览区 ▸ 不吃鼠标事件（点击要落到段落上）',
+  /\.md-preview \[data-pages\]::before\s*\{[^}]*pointer-events:\s*none/.test(CSS));
+check('style.css: 触摸设备（无 hover）下预览区 ▸ 常显',
+  /@media \(hover:\s*none\)\s*\{[^}]*\.md-preview \[data-pages\]::before/.test(CSS));
+check('style.css: 预览区也有跳转命中高亮（.md-active）',
+  /\.md-preview \.md-active\s*\{[^}]*#fff4d6/.test(CSS));
+
+/* 几何不变量（与查看区那条同一个道理）：▸ 悬挂在 padding 里的距离必须**小于**左内边距，
+   否则会被 #md-preview 的 overflow 裁掉、或挤出横向滚动条。
+   写成 px 而不是 em 也是刻意的：字号调到 24 时 em 会跟着变大 → 越界。 */
+const previewHang = Number(
+  (CSS.match(/\.md-preview \[data-pages\]::before\s*\{[^}]*left:\s*-(\d+(?:\.\d+)?)px/) || [])[1]);
+const previewPad = (CSS.match(/#md-preview\s*\{[^}]*padding:\s*([\d.]+)px\s+([\d.]+)px\s+([\d.]+)px\s+([\d.]+)px/) || []);
+const previewPadLeft = Number(previewPad[4]);
+check('几何: 解析得到预览区 ▸ 悬挂距离与左内边距',
+  Number.isFinite(previewHang) && Number.isFinite(previewPadLeft));
+check(`几何: 预览区 ▸ 悬挂 ${previewHang}px < 左内边距 ${previewPadLeft}px → 不会被裁掉`,
+  previewHang > 0 && previewHang < previewPadLeft);
 /* 编辑器的 #md-* 规则同样受「不许绝对 px 字号」约束 —— 否则字号控件带不动它们 */
 const editorPxFont = [...CSS.matchAll(
   /#md-(?:editor|textarea|preview|errors|warn|save|cancel|status|counter)[^{]*\{[^}]*?font-size:\s*(\d+(?:\.\d+)?)px/g)];

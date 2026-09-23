@@ -300,20 +300,23 @@ function insertBanner(group, beforeEl) {
  * Markdown 渲染
  * ------------------------------------------------------------------ */
 
-function renderMarkdown() {
-  const article = $('#md');
-  article.innerHTML = window.marked.parse(state.data.summary_md || '', { gfm: true });
+/* Markdown → DOM 的**唯一**渲染链：marked → 锚点 → 悬停气泡 → 代码高亮 → 公式。
+ * 查看区（#md）与编辑器的预览区（#md-preview）共用这一条 —— 两边必须渲染得一模一样，
+ * 渲染链一旦分叉，「预览」当场就是在骗人（编辑时看到的东西和保存后看到的不是一回事）。
+ * 写成收 container 参数的函数，正是为了让两条路径不可能各写一套。 */
+function renderRichMarkdown(container, md) {
+  container.innerHTML = window.marked.parse(md || '', { gfm: true });
 
-  attachAnchors(article);
-  annotateAnchors(article);       // 挂「点击跳转到第 N 页」气泡
+  attachAnchors(container);
+  annotateAnchors(container);       // 挂「点击跳转到第 N 页」气泡
 
   // 顺序：先 hljs（只认 <pre><code>），再 KaTeX（会插入自己的 DOM）
-  article.querySelectorAll('pre code').forEach((block) => {
+  container.querySelectorAll('pre code').forEach((block) => {
     try { window.hljs.highlightElement(block); } catch (e) { console.warn('高亮失败', e); }
   });
 
   if (window.renderMathInElement) {
-    window.renderMathInElement(article, {
+    window.renderMathInElement(container, {
       delimiters: [
         { left: '$$', right: '$$', display: true },
         { left: '$', right: '$', display: false },
@@ -322,6 +325,10 @@ function renderMarkdown() {
       ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code', 'option'],
     });
   }
+}
+
+function renderMarkdown() {
+  renderRichMarkdown($('#md'), state.data.summary_md || '');
 }
 
 /* ------------------------------------------------------------------ *
@@ -573,8 +580,11 @@ function relayoutPdfKeepingPosition() {
   scrollToPage(visible);
 }
 
+/* 高亮跳转目标（1.6 秒后退场）。查看区与预览区都清一遍 ——
+   两边的锚点都能点，高亮不互清的话会同时亮着两处，看不出刚跳的是哪一段。 */
 function highlightMd(el) {
-  $('#md').querySelectorAll('.md-active').forEach((x) => x.classList.remove('md-active'));
+  document.querySelectorAll('#md .md-active, #md-preview .md-active')
+    .forEach((x) => x.classList.remove('md-active'));
   el.classList.add('md-active');
   setTimeout(() => el.classList.remove('md-active'), 1600);
 }
@@ -972,6 +982,11 @@ function initFontControls() {
 /* 超长草稿提醒的阈值（设计 §4：100KB 内流畅）。只提醒、不阻止。 */
 const MAX_DRAFT_CHARS = 100000;
 
+/* 预览重渲的防抖窗口。预览与查看走**同一条**渲染链（marked → 锚点 → 高亮 → 公式），
+ * 而高亮与公式在长文档上不便宜 —— 每个按键都跑一遍会把手感拖垮。
+ * 等手停下来再渲，人几乎感觉不到，CPU 省一截。 */
+const PREVIEW_DEBOUNCE_MS = 150;
+
 /* HTML 转义。错误条要显示服务端回来的文案（里面含用户自己正文的预览片段），
    拼 innerHTML 前必须转义，否则正文里的 < 、> 会当场变成标签。 */
 function escapeHtml(text) {
@@ -1070,14 +1085,6 @@ function updateCounter(text) {
   return value.split('\n').length + ' 行 / ' + Array.from(value).length + ' 字符';
 }
 
-/* 预览 HTML。**只跑 marked**：不挂锚点、不绑跳转、不跑高亮与公式 ——
- * 预览是「只读视觉确认」，点不动任何东西，也不该在每次按键时烧 CPU。
- * 代价（已在 CHANGELOG 注明）：代码块没有配色、$公式$ 显示成源码，
- * 切回查看模式即为最终渲染。 */
-function previewHtml(md) {
-  return window.marked.parse(md || '', { gfm: true });
-}
-
 /* 超长草稿提醒（只提醒、不阻止）。阈值由调用方传 MAX_DRAFT_CHARS ——
  * 这样这条纯函数不依赖模块级常量，测试可以喂任意阈值。 */
 function draftWarnings(md, maxChars) {
@@ -1129,10 +1136,20 @@ function refreshEditorCounter() {
   if (ta && el) el.textContent = updateCounter(ta.value);
 }
 
+/* 预览区：与查看区**同一个渲染函数**（renderRichMarkdown）——
+ * 高亮、公式、锚点 ▸ 标记与悬停气泡全都到位，编辑时看到的就是保存后看到的。 */
 function refreshEditorPreview() {
   const ta = $('#md-textarea');
   const preview = $('#md-preview');
-  if (ta && preview) preview.innerHTML = previewHtml(ta.value);
+  if (ta && preview) renderRichMarkdown(preview, ta.value);
+}
+
+let previewTimer = null;
+
+/* 输入时先起个定时器：连着打字只会渲最后一次（见 PREVIEW_DEBOUNCE_MS 的说明）。 */
+function scheduleEditorPreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(refreshEditorPreview, PREVIEW_DEBOUNCE_MS);
 }
 
 /* 回写编辑框并把选区放好，再派发 input —— 预览 / 计数 / 脏标记 / 状态条全挂在 input 上，
@@ -1190,6 +1207,7 @@ function applyToolbarAction(act) {
 }
 
 /* 编辑框每次改动：标脏 + 刷预览 / 计数 / 状态条。
+   预览走防抖（高亮 + 公式不便宜），计数与状态条是纯字符串拼接，照旧即时。
    顺手清掉上一次保存留下的错误条；警告条换成「当前草稿」的（超长提醒）。 */
 function onEditorInput() {
   const ta = $('#md-textarea');
@@ -1198,7 +1216,7 @@ function onEditorInput() {
   state.editorDraft = ta.value;
   showEditorErrors([]);
   showEditorWarnings(draftWarnings(ta.value, MAX_DRAFT_CHARS));
-  refreshEditorPreview();
+  scheduleEditorPreview();
   refreshEditorCounter();
   refreshEditorStatus(null);
 }
@@ -1236,6 +1254,7 @@ function renderView() {
   const editor = $('#md-editor');
   if (editor) editor.hidden = true;
   if (!scroller) return;
+  clearTimeout(previewTimer);          // 走了就别再为看不见的预览区白渲一次
   scroller.hidden = false;
   if (state.mdStale) {
     renderMarkdown();
@@ -1328,6 +1347,10 @@ function initEditor() {
   $('#md-textarea').addEventListener('input', onEditorInput);
   $('#md-save').addEventListener('click', saveEditorDraft);
   $('#md-cancel').addEventListener('click', cancelEditorDraft);
+
+  /* 预览区与查看区一样可点：点带锚点的段落 → 跳 PDF。
+     这是「预览 = 所见即所得」的一部分 —— 同一个渲染链，也该是同一套交互。 */
+  $('#md-preview').addEventListener('click', onMdClick);
 
   /* 模式分段的绑定风格与「简化版 / 完整版」一致（事件委托 + data-* 属性） */
   $('#mode-switch').addEventListener('click', onModeSwitch);

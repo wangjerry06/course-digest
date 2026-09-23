@@ -385,13 +385,43 @@ button:active { background: #e6e6e9; }
 
 #md-preview {
   min-width: 0;
-  padding: 12px;
+  /* 左边多留 8px：给悬挂在外面的 ▸ 让位（与 #md 的「24px 内边距 / -14px 悬挂」同一套道理） */
+  padding: 12px 12px 12px 20px;
   overflow-y: auto;
   overflow-wrap: anywhere;   /* 长 URL / 长 token 不许把栏撑宽 */
   font-size: var(--md-font-size);
   line-height: 1.6;
   background: #fff;
   color: #1d1d1f;
+}
+
+/* 预览区与查看区**共用同一条渲染链**（renderRichMarkdown），所以锚点的 ▸ 标记、
+   悬停反馈、点击跳转也必须一样 —— 下面这几条是上面 `#md [data-pages]` 那组的镜像。
+   标记挂在 padding 里而不是内容里：既不引起重排，也不会被 overflow 裁掉。 */
+.md-preview [data-pages] { position: relative; cursor: pointer; }
+.md-preview [data-pages]:hover { background: #f0f7ff; }
+.md-preview [data-pages]::before {
+  content: "▸";
+  position: absolute;
+  left: -12px;
+  top: 0;
+  color: var(--accent);
+  opacity: 0;
+  transition: opacity .15s;
+  pointer-events: none;      /* 别抢点击 —— 点击要落到 [data-pages] 自己身上 */
+}
+.md-preview [data-pages]:hover::before { opacity: .6; }
+
+@media (hover: none) {
+  .md-preview [data-pages]::before { opacity: .4; }
+}
+
+/* 跳转命中时的高亮（预览区也会跳，所以也得有） */
+.md-preview .md-active {
+  background: #fff4d6;
+  box-shadow: 0 0 0 6px #fff4d6;
+  border-radius: 3px;
+  transition: background .4s, box-shadow .4s;
 }
 
 /* 预览区的正文排版 —— 与上面 #md 那一套**刻意重复**一份：
