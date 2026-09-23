@@ -72,6 +72,8 @@ agent 会读 `SKILL.md` 走四步：`import → extract → 读压缩正文写�
 
 ### 方式二：自己动手
 
+> Windows 用户：下文 `python3 -m course_digest ...` 换成 `python -m course_digest ...`（或 `py -m ...`）。
+
 ```bash
 python3 -m course_digest import "~/Desktop/网络编程/03-transport.pdf"   # stdout 打出 docId
 python3 -m course_digest extract 2026-09-19-03-transport                # 看压缩比

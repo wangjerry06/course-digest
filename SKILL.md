@@ -78,6 +78,8 @@ python3 --version        # Windows：python --version 或 py --version
 
 ### 1. 纳入文档库
 
+> Windows 用户：下文所有 `python3 -m course_digest ...` 换成 `python -m course_digest ...`（或 `py -m ...`）；flag 参数位置不变。
+
 ```bash
 python3 -m course_digest import "<PDF 路径>"      # stdout 就是 docId，记下来
 ```

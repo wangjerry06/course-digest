@@ -58,7 +58,8 @@ STOP_WAIT = 3.0             # stop 等进程退出的上限
 # 4 MiB 留了两个数量级余量，只用来挡住「客户端把长度写成天文数字」这一类请求。
 MAX_BODY_BYTES = 4 * 1024 * 1024
 
-# 代码仓库根目录：detached 子进程要在这里跑 `python3 -m course_digest`
+# 代码仓库根目录：detached 子进程要在这里跑。命令参数必须用 `sys.executable`
+#（不是 `python3`，Windows 上 python3 是 Store 占位假命令），见下方 launch_server。
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # 展示给用户看的 CLI 命令前缀（ADR-016）：Windows 上 python3.exe 常是 Store 的
